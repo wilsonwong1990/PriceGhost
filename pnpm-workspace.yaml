@@ -9,4 +9,5 @@ nodeLinker: hoisted
 
 allowBuilds:
   esbuild: true
+  koffi: false
   puppeteer: true

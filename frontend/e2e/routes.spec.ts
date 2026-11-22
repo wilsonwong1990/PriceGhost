@@ -242,6 +242,136 @@ test('allows admins into every admin section and exposes guarded debug', async (
   await expect(page.getByRole('heading', { name: 'Debug Access Restricted' })).toBeVisible();
 });
 
+test('defaults Copilot to auto and shows premium costs when models are synced', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  let saved: Record<string, unknown> | undefined;
+  await page.route('**/api/admin/settings/ai', async route => {
+    if (route.request().method() === 'PUT') {
+      saved = route.request().postDataJSON();
+      await route.fulfill({ json: saved });
+    } else {
+      await route.fulfill({ json: { ai_provider: 'gemini', gemini_model: 'gemini', copilot_model: null, copilot_api_key: '********' } });
+    }
+  });
+  await page.route('**/api/admin/settings/ai/copilot/models**', async route => {
+    const models = route.request().method() === 'POST'
+      ? [{ id: 'model-a', name: 'Model A', description: 'Acme, 2x premium requests' }]
+      : [];
+    await route.fulfill({ json: { models } });
+  });
+  await page.goto('/admin/ai');
+  await page.locator('select').filter({ has: page.locator('option[value="copilot"]') }).selectOption('copilot');
+  await expect(page.locator('select').filter({ has: page.locator('option[value="fusion"]') })).toHaveValue('auto');
+  const token = page.locator('#copilot-api-key');
+  await token.focus();
+  await token.press('End');
+  await token.pressSequentially('github_pat_new');
+  await expect(token).toHaveValue('github_pat_new');
+  await page.getByRole('button', { name: /Sync/ }).click();
+  await expect(page.getByRole('option', { name: 'Model A (Acme, 2x premium requests)' })).toBeAttached();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => saved?.copilot_model).toBe('auto');
+  expect(saved?.copilot_api_key).toBe('github_pat_new');
+});
+
+test('initializes an existing Copilot configuration without overwriting an explicit model', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  let model: string | null = null;
+  await page.route('**/api/admin/settings/ai', async route => {
+    await route.fulfill({ json: { ai_provider: 'copilot', copilot_model: model, copilot_api_key: 'test-token' } });
+  });
+  await page.goto('/admin/ai');
+  await expect(page.locator('select').filter({ has: page.locator('option[value="fusion"]') })).toHaveValue('auto');
+  model = 'my-model';
+  await page.reload();
+  await expect(page.getByPlaceholder('auto')).toHaveValue('my-model');
+});
+
+test('keeps custom model editing active through known identifiers and resets on Cancel', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  await page.route('**/api/admin/settings/ai', async route => {
+    await route.fulfill({ json: { ai_provider: 'copilot', copilot_model: 'auto', copilot_api_key: 'test-token' } });
+  });
+  await page.goto('/admin/ai');
+
+  const model = page.locator('select').filter({ has: page.locator('option[value="fusion"]') });
+  await model.selectOption('__custom__');
+  const editor = page.getByPlaceholder('auto');
+  await editor.fill('');
+  await expect(editor).toBeVisible();
+  await editor.pressSequentially('auto-router');
+  await expect(editor).toHaveValue('auto-router');
+  await expect(editor).toBeFocused();
+
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(model).toHaveValue('auto');
+  await expect(editor).not.toBeVisible();
+
+  await model.selectOption('__custom__');
+  await editor.fill('auto');
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(model).toHaveValue('auto');
+  await expect(editor).not.toBeVisible();
+});
+
+test('saves and verifies Copilot routing choices without losing the previous tier', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  let saved: Record<string, unknown> | undefined;
+  let verified: Record<string, unknown> | undefined;
+  await page.route('**/api/admin/settings/ai', async route => {
+    if (route.request().method() === 'PUT') {
+      saved = route.request().postDataJSON();
+      await route.fulfill({ json: saved });
+    } else {
+      await route.fulfill({ json: { ai_provider: 'copilot', copilot_model: 'auto', copilot_api_key: '********' } });
+    }
+  });
+  await page.route('**/api/admin/settings/ai/test-copilot', async route => {
+    verified = route.request().postDataJSON();
+    await route.fulfill({ json: { success: true, message: 'Verified' } });
+  });
+  await page.goto('/admin/ai');
+  const model = page.locator('select').filter({ has: page.locator('option[value="fusion"]') });
+  await page.locator('#copilot-auto-tier').selectOption('intelligence');
+  await model.selectOption('fusion');
+  await page.locator('#copilot-fusion-tier').selectOption('max');
+  await page.getByRole('button', { name: 'Verify', exact: true }).click();
+  await expect.poll(() => verified?.copilot_fusion_tier).toBe('max');
+  expect(verified).toMatchObject({ model: 'fusion', copilot_auto_tier: 'intelligence' });
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => saved?.copilot_fusion_tier).toBe('max');
+  expect(saved).toMatchObject({ copilot_model: 'fusion', copilot_auto_tier: 'intelligence' });
+  await model.selectOption('auto');
+  await expect(page.locator('#copilot-auto-tier')).toHaveValue('intelligence');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(model).toHaveValue('fusion');
+  await expect(page.locator('#copilot-fusion-tier')).toHaveValue('max');
+  await model.selectOption('__custom__');
+  await page.getByPlaceholder('auto').fill('');
+  await expect(page.getByPlaceholder('auto')).toBeVisible();
+  await page.getByPlaceholder('auto').fill('custom-model');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(model).toHaveValue('fusion');
+  await expect(page.getByPlaceholder('auto')).not.toBeVisible();
+});
+
 /**
  * Notification channel credentials are write-only (issue #272).
  *

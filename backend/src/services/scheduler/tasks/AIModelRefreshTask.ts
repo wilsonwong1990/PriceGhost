@@ -19,6 +19,7 @@ export async function refreshAIModels(): Promise<void> {
       { name: 'mistral', key: settings.mistral_api_key },
       { name: 'deepseek', key: settings.deepseek_api_key },
       { name: 'openrouter', key: settings.openrouter_api_key },
+      { name: 'copilot', key: settings.copilot_api_key },
       { name: 'ollama', baseUrl: settings.ollama_base_url },
       { name: 'openai_compatible', baseUrl: settings.openai_compatible_base_url, key: settings.openai_compatible_api_key },
     ];

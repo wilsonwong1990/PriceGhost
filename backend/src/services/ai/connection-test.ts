@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getVertexEndpoint, getVertexAuthToken } from './providers/vertex-auth';
+import { runCopilotPrompt } from './providers/copilot-client';
 
 /**
  * Test Connection: Gemini
@@ -60,6 +61,28 @@ export async function testOpenAICompatibleConnection(params: {
     throw new Error('Empty response from OpenAI-compatible API');
   }
   return text.trim();
+}
+
+/**
+ * Test Connection: GitHub Copilot
+ */
+export async function testCopilotConnection(
+  token: string,
+  modelName?: string,
+  tiers?: { autoTier?: unknown; fusionTier?: unknown }
+): Promise<string> {
+  const response = await runCopilotPrompt({
+    token,
+    model: modelName,
+    autoTier: tiers?.autoTier,
+    fusionTier: tiers?.fusionTier,
+    prompt: 'Say "HELLO WORLD"',
+    timeoutMs: 60000
+  });
+  if (!response.text) {
+    throw new Error('Empty response received from GitHub Copilot');
+  }
+  return response.text.trim();
 }
 
 /**

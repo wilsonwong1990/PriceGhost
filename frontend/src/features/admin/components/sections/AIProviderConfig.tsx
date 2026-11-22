@@ -8,14 +8,23 @@ import { useToast } from '../../../../context/ToastContext';
 import { apiErrorMessage } from '../../../../api/error';
 import ModelSelector from './ModelSelector';
 
+const COPILOT_BUILT_IN_MODELS: AIModel[] = [
+  { id: 'auto', name: 'Auto' },
+  { id: 'fusion', name: 'Copilot Fusion' },
+];
+
 interface AIProviderConfigProps {
   aiSettings: AISettings | null;
   setAiSettings: React.Dispatch<React.SetStateAction<AISettings | null>>;
+  modelSelectorResetKey: number;
+  onModelSelectorDirtyChange: (dirty: boolean) => void;
 }
 
 export default function AIProviderConfig({
   aiSettings,
   setAiSettings,
+  modelSelectorResetKey,
+  onModelSelectorDirtyChange,
 }: AIProviderConfigProps) {
   const { execute: runTestProvider } = useAsyncAction();
   const { showToast } = useToast();
@@ -60,6 +69,7 @@ export default function AIProviderConfig({
       else if (provider === 'groq') apiKey = aiSettings?.groq_api_key || undefined;
       else if (provider === 'mistral') apiKey = aiSettings?.mistral_api_key || undefined;
       else if (provider === 'openrouter') apiKey = aiSettings?.openrouter_api_key || undefined;
+      else if (provider === 'copilot') apiKey = aiSettings?.copilot_api_key || undefined;
       else if (provider === 'ollama') baseUrl = aiSettings?.ollama_base_url || undefined;
       else if (provider === 'openai_compatible') {
         baseUrl = aiSettings?.openai_compatible_base_url || undefined;
@@ -116,6 +126,15 @@ export default function AIProviderConfig({
         return;
       }
       res = await AIService.testOpenRouter(aiSettings.openrouter_api_key, aiSettings.openrouter_model || undefined);
+    } else if (provider === 'copilot') {
+      if (!aiSettings?.copilot_api_key) {
+        showToast('Enter a GitHub token before verifying.', 'error');
+        return;
+      }
+      res = await AIService.testCopilot(aiSettings.copilot_api_key, aiSettings.copilot_model || undefined, {
+        copilot_auto_tier: aiSettings.copilot_auto_tier,
+        copilot_fusion_tier: aiSettings.copilot_fusion_tier,
+      });
     } else if (provider === 'openai_compatible') {
       if (!aiSettings?.openai_compatible_base_url || !aiSettings?.openai_compatible_model) {
         showToast('Enter the endpoint base URL and a model name before verifying.', 'error');
@@ -161,7 +180,14 @@ export default function AIProviderConfig({
 
       <div className="form-group">
         <label>Primary AI Provider</label>
-        <select className="form-control" value={aiSettings?.ai_provider || 'gemini'} onChange={(e) => setAiSettings(s => s ? { ...s, ai_provider: e.target.value as any } : null)}>
+        <select className="form-control" value={aiSettings?.ai_provider || 'gemini'} onChange={(e) => {
+          const provider = e.target.value as AISettings['ai_provider'];
+          setAiSettings(s => s ? {
+            ...s,
+            ai_provider: provider,
+            copilot_model: provider === 'copilot' && !s.copilot_model ? 'auto' : s.copilot_model,
+          } : null);
+        }}>
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI (GPT)</option>
             <option value="gemini">Google Gemini</option>
@@ -170,6 +196,7 @@ export default function AIProviderConfig({
             <option value="groq">Groq (Llama 3)</option>
             <option value="mistral">Mistral AI</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="copilot">GitHub Copilot</option>
             <option value="openai_compatible">OpenAI-Compatible (vLLM, LM Studio, ...)</option>
             <option value="ollama">Local Ollama</option>
         </select>
@@ -197,6 +224,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Google Gemini"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.gemini_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, gemini_model: val } : null)}
             models={modelsCache['gemini'] || []}
@@ -268,6 +297,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="OpenAI"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.openai_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, openai_model: val } : null)}
             models={modelsCache['openai'] || []}
@@ -302,6 +333,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Anthropic"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.anthropic_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, anthropic_model: val } : null)}
             models={modelsCache['anthropic'] || []}
@@ -336,6 +369,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="DeepSeek"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.deepseek_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, deepseek_model: val } : null)}
             models={modelsCache['deepseek'] || []}
@@ -370,6 +405,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Groq"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.groq_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, groq_model: val } : null)}
             models={modelsCache['groq'] || []}
@@ -404,6 +441,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Mistral"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.mistral_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, mistral_model: val } : null)}
             models={modelsCache['mistral'] || []}
@@ -438,6 +477,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="OpenRouter"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.openrouter_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, openrouter_model: val } : null)}
             models={modelsCache['openrouter'] || []}
@@ -446,6 +487,81 @@ export default function AIProviderConfig({
             canSync={true}
             customPlaceholder="e.g. meta-llama/llama-3.1-8b-instruct:free"
           />
+        </>
+      )}
+
+      {aiSettings?.ai_provider === 'copilot' && (
+        <>
+          <form onSubmit={(e) => e.preventDefault()} className="form-group">
+            <label htmlFor="copilot-api-key">GitHub Token</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ flex: 1 }}>
+                <PasswordInput secret
+                  id="copilot-api-key"
+                  name="copilot-api-key"
+                  value={aiSettings?.copilot_api_key || ''}
+                  onFocus={e => { if (e.currentTarget.value === '********') e.currentTarget.select(); }}
+                  onChange={e => {
+                    const value = e.target.value;
+                    setAiSettings(s => s ? {
+                      ...s,
+                      copilot_api_key: s.copilot_api_key === '********' ? value.replace(/\*/g, '') : value,
+                    } : null);
+                  }}
+                  placeholder="github_pat_..."
+                  autoComplete="new-password"
+                  allowReveal={!aiSettings?.redact_api_keys}
+                />
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider('copilot')}>Verify</button>
+            </div>
+            <small style={{ color: 'var(--text-muted)' }}>
+              Fine-grained personal access token with the "Copilot Requests" permission. Usage counts against the token owner's Copilot premium requests.
+            </small>
+          </form>
+
+          <ModelSelector
+            providerName="GitHub Copilot"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
+            value={aiSettings?.copilot_model || ''}
+            onChange={val => setAiSettings(s => s ? { ...s, copilot_model: val } : null)}
+            builtInModels={COPILOT_BUILT_IN_MODELS}
+            models={(modelsCache['copilot'] || []).map(model => ({
+              ...model,
+              name: model.description ? `${model.name || model.id} (${model.description})` : model.name,
+            }))}
+            onSync={() => handleSyncModels('copilot')}
+            isSyncing={!!isSyncingMap['copilot']}
+            canSync={Boolean(aiSettings?.copilot_api_key)}
+            customPlaceholder="auto"
+          />
+          {aiSettings?.copilot_model === 'auto' && (
+            <div className="form-group">
+              <label htmlFor="copilot-auto-tier">Auto routing preference</label>
+              <select id="copilot-auto-tier" className="form-control" value={aiSettings.copilot_auto_tier || ''} onChange={e => setAiSettings(s => s ? { ...s, copilot_auto_tier: e.target.value || null } : null)}>
+                <option value="">Copilot default</option>
+                <option value="efficiency">Efficiency</option>
+                <option value="balance">Balance</option>
+                <option value="intelligence">Intelligence</option>
+              </select>
+            </div>
+          )}
+          {aiSettings?.copilot_model === 'fusion' && (
+            <div className="form-group">
+              <label htmlFor="copilot-fusion-tier">Copilot Fusion tier</label>
+              <select id="copilot-fusion-tier" className="form-control" value={aiSettings.copilot_fusion_tier || 'standard'} onChange={e => setAiSettings(s => s ? { ...s, copilot_fusion_tier: e.target.value } : null)}>
+                <option value="standard">Standard</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
+            </div>
+          )}
+          {(aiSettings?.copilot_model === 'auto' || aiSettings?.copilot_model === 'fusion') && (
+            <small style={{ color: 'var(--text-muted)' }}>
+              Tier availability depends on the token owner's Copilot plan. Use Verify to test your selection.
+            </small>
+          )}
         </>
       )}
 
@@ -476,6 +592,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="OpenAI-Compatible"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.openai_compatible_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, openai_compatible_model: val } : null)}
             models={modelsCache['openai_compatible'] || []}
@@ -507,6 +625,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Ollama"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.ollama_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, ollama_model: val } : null)}
             models={modelsCache['ollama'] || []}
