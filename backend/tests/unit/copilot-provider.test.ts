@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { systemSettingsRepository } from '../../src/models';
 import { logger } from '../../src/utils/system/logger';
+import { withRetry } from '../../src/utils/system/retry';
 import type { AISettings } from '../../src/models/types';
 
 /**
@@ -324,9 +325,10 @@ describe('GitHub Copilot provider', () => {
         throw new Error('Upstream connection refused by the model host');
       };
       await expect(runCopilotPrompt({ token: TOKEN, prompt: 'a', timeoutMs: 5000 })).rejects.toMatchObject({
-        message: 'GitHub Copilot request failed',
-        cause: expect.objectContaining({ message: 'Upstream connection refused by the model host' }),
+        message: 'GitHub Copilot request failed (model_error)',
+        failureCategory: 'model_error',
       });
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'a', timeoutMs: 5000 })).rejects.not.toHaveProperty('cause');
       await expect(runCopilotPrompt({ token: TOKEN, prompt: 'b', timeoutMs: 5000 })).rejects.toThrow(/request failed/);
       expect(sdk.clients).toHaveLength(1);
 
@@ -338,6 +340,83 @@ describe('GitHub Copilot provider', () => {
       await runCopilotPrompt({ token: TOKEN, prompt: 'd', timeoutMs: 5000 });
       expect(sdk.clients).toHaveLength(2);
       await vi.waitFor(() => expect(sdk.clients[0].stop).toHaveBeenCalled());
+    });
+
+    it('preserves nested SDK status safely, retries transient failures, and skips exhausted quota', async () => {
+      const { runCopilotPrompt } = await load();
+      const privateDetails = `Model response included ${TOKEN}`;
+      sdk.sendAndWait = async () => {
+        throw Object.assign(new Error('SDK request failed'), {
+          data: { status: 503, code: 'SERVICE_UNAVAILABLE', message: privateDetails },
+        });
+      };
+
+      const transientError = await runCopilotPrompt({ token: TOKEN, prompt: 'transient', timeoutMs: 5000 }).catch(error => error);
+      expect(transientError).toMatchObject({
+        status: 503,
+        failureCategory: 'service_unavailable',
+        message: 'GitHub Copilot request failed (service_unavailable, HTTP 503)',
+      });
+      expect((transientError as Error).message).not.toContain(privateDetails);
+      const retryTransient = vi.fn(async () => { throw transientError; });
+      await expect(withRetry(retryTransient, { maxRetries: 2, initialDelay: 0 })).rejects.toBe(transientError);
+      expect(retryTransient).toHaveBeenCalledTimes(3);
+      expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain(TOKEN);
+      expect(vi.mocked(logger.warn).mock.calls[0][0]).toContain('(503)');
+
+      sdk.sendAndWait = async () => {
+        throw Object.assign(new Error('SDK request failed'), {
+          data: { status: 429, message: `Copilot premium request quota exhausted: ${TOKEN}` },
+        });
+      };
+      const quotaError = await runCopilotPrompt({ token: TOKEN, prompt: 'quota', timeoutMs: 5000 }).catch(error => error);
+      expect(quotaError).toMatchObject({
+        status: 429,
+        failureCategory: 'quota_exhausted',
+        retryable: false,
+      });
+      expect((quotaError as Error).message).not.toContain(TOKEN);
+      const retryQuota = vi.fn(async () => { throw quotaError; });
+      await expect(withRetry(retryQuota, { maxRetries: 2, initialDelay: 0 })).rejects.toBe(quotaError);
+      expect(retryQuota).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['structured premium-request quota code', { status: 429, code: 'PREMIUM_REQUEST_LIMIT_EXCEEDED', message: 'Request denied' }],
+      ['premium-request limit wording', { status: 429, message: 'Premium request limit reached' }],
+    ])('does not retry quota exhaustion reported by %s', async (_description, metadata) => {
+      sdk.sendAndWait = async () => {
+        throw Object.assign(new Error('SDK request failed'), { data: metadata });
+      };
+      const { runCopilotPrompt } = await load();
+
+      const quotaError = await runCopilotPrompt({ token: TOKEN, prompt: 'quota', timeoutMs: 5000 }).catch(error => error);
+      expect(quotaError).toMatchObject({ failureCategory: 'quota_exhausted', retryable: false });
+      const retryQuota = vi.fn(async () => { throw quotaError; });
+      await expect(withRetry(retryQuota, { maxRetries: 2, initialDelay: 0 })).rejects.toBe(quotaError);
+      expect(retryQuota).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs only safe Copilot failure categories', async () => {
+      sdk.sendAndWait = async () => {
+        throw Object.assign(new Error('SDK request failed'), {
+          data: { status: 503, message: `Model host unavailable: ${TOKEN}` },
+        });
+      };
+      const { CopilotProvider } = await import('../../src/services/ai/providers/copilot');
+      const provider = new CopilotProvider(storedSettings({
+        copilot_api_key: TOKEN,
+        copilot_model: 'auto',
+        ai_max_retries: 0,
+        ai_timeout: 5000,
+      }));
+
+      await expect(provider.generate('price?')).rejects.toMatchObject({ failureCategory: 'service_unavailable' });
+      expect(logger.error).toHaveBeenCalledWith(
+        'AI | copilot | GitHub Copilot request failed (service_unavailable, HTTP 503)',
+        'AI'
+      );
+      expect(JSON.stringify(vi.mocked(logger.error).mock.calls)).not.toContain(TOKEN);
     });
 
     it.each([
@@ -389,9 +468,9 @@ describe('GitHub Copilot provider', () => {
       sdk.startError = Object.assign(new Error('Domain is required: internal SDK details'), { statusCode: 403 });
       const { runCopilotPrompt } = await load();
       await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 })).rejects.toMatchObject({
-        message: 'GitHub Copilot request failed',
+        message: 'GitHub Copilot request failed (request_rejected, HTTP 403)',
         status: 403,
-        cause: sdk.startError,
+        failureCategory: 'request_rejected',
       });
     });
 

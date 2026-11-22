@@ -16,11 +16,15 @@ const COPILOT_BUILT_IN_MODELS: AIModel[] = [
 interface AIProviderConfigProps {
   aiSettings: AISettings | null;
   setAiSettings: React.Dispatch<React.SetStateAction<AISettings | null>>;
+  modelSelectorResetKey: number;
+  onModelSelectorDirtyChange: (dirty: boolean) => void;
 }
 
 export default function AIProviderConfig({
   aiSettings,
   setAiSettings,
+  modelSelectorResetKey,
+  onModelSelectorDirtyChange,
 }: AIProviderConfigProps) {
   const { execute: runTestProvider } = useAsyncAction();
   const { showToast } = useToast();
@@ -220,6 +224,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Google Gemini"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.gemini_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, gemini_model: val } : null)}
             models={modelsCache['gemini'] || []}
@@ -291,6 +297,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="OpenAI"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.openai_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, openai_model: val } : null)}
             models={modelsCache['openai'] || []}
@@ -325,6 +333,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Anthropic"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.anthropic_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, anthropic_model: val } : null)}
             models={modelsCache['anthropic'] || []}
@@ -359,6 +369,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="DeepSeek"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.deepseek_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, deepseek_model: val } : null)}
             models={modelsCache['deepseek'] || []}
@@ -393,6 +405,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Groq"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.groq_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, groq_model: val } : null)}
             models={modelsCache['groq'] || []}
@@ -427,6 +441,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Mistral"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.mistral_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, mistral_model: val } : null)}
             models={modelsCache['mistral'] || []}
@@ -461,6 +477,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="OpenRouter"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.openrouter_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, openrouter_model: val } : null)}
             models={modelsCache['openrouter'] || []}
@@ -504,6 +522,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="GitHub Copilot"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.copilot_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, copilot_model: val } : null)}
             builtInModels={COPILOT_BUILT_IN_MODELS}
@@ -572,6 +592,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="OpenAI-Compatible"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.openai_compatible_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, openai_compatible_model: val } : null)}
             models={modelsCache['openai_compatible'] || []}
@@ -603,6 +625,8 @@ export default function AIProviderConfig({
 
           <ModelSelector
             providerName="Ollama"
+            resetKey={modelSelectorResetKey}
+            onCustomModeChange={onModelSelectorDirtyChange}
             value={aiSettings?.ollama_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, ollama_model: val } : null)}
             models={modelsCache['ollama'] || []}

@@ -22,15 +22,22 @@ export class CopilotProvider implements AIProvider {
     traceAiRequest(prompt, { provider: PROVIDER_NAME, productId: options?.productId, label: options?.retryLabel });
 
     // The Copilot runtime has no per-request output cap, so maxTokens is not applied.
-    const response = await withRetry(() => runCopilotPrompt({
-      token: this.token,
-      model: this.model,
-      autoTier: this.settings.copilot_auto_tier,
-      fusionTier: this.settings.copilot_fusion_tier,
-      prompt,
-      jsonMode: options?.jsonMode,
-      timeoutMs: this.settings.ai_timeout || 30000
-    }), { maxRetries: this.settings.ai_max_retries ?? 2 }, options?.retryLabel || PROVIDER_NAME);
+    let response: AIResponse;
+    try {
+      response = await withRetry(() => runCopilotPrompt({
+        token: this.token,
+        model: this.model,
+        autoTier: this.settings.copilot_auto_tier,
+        fusionTier: this.settings.copilot_fusion_tier,
+        prompt,
+        jsonMode: options?.jsonMode,
+        timeoutMs: this.settings.ai_timeout || 30000
+      }), { maxRetries: this.settings.ai_max_retries ?? 2 }, options?.retryLabel || PROVIDER_NAME);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'GitHub Copilot request failed';
+      logger.error(`AI | ${PROVIDER_NAME} | ${message}`, 'AI');
+      throw error;
+    }
 
     if (response.usage) {
       logger.debug(`AI | ${PROVIDER_NAME} | Tokens: ${response.usage.totalTokens}`, 'AI', {

@@ -13,6 +13,8 @@ import Icon from '../../../../components/Icon';
 export default function AISection() {
   const [aiSettings, setAiSettings] = useState<AISettings | null>(null);
   const [savedSettings, setSavedSettings] = useState<AISettings | null>(null);
+  const [modelSelectorResetKey, setModelSelectorResetKey] = useState(0);
+  const [isModelSelectorDirty, setIsModelSelectorDirty] = useState(false);
   const { execute: runFetchAIData, isLoading } = useAsyncAction(true);
   const { showToast } = useToast();
   const { execute: runSaveAISettings, isLoading: isSavingAI } = useAsyncAction();
@@ -55,6 +57,7 @@ export default function AISection() {
     }
     await AIService.updateAI(aiSettings);
     setSavedSettings(aiSettings);
+    setIsModelSelectorDirty(false);
   }, { onSuccessMessage: 'AI settings saved', onErrorFallback: 'Save failed' });
 
   if (isLoading) return <LoadingSpinner centered />;
@@ -70,6 +73,8 @@ export default function AISection() {
         <AIProviderConfig 
           aiSettings={aiSettings}
           setAiSettings={setAiSettings}
+          modelSelectorResetKey={modelSelectorResetKey}
+          onModelSelectorDirtyChange={setIsModelSelectorDirty}
         />
       </CollapsibleCard>
 
@@ -78,7 +83,12 @@ export default function AISection() {
       </CollapsibleCard>
 
       <div className="settings-actions">
-        <button type="button" className="btn btn-secondary" onClick={() => savedSettings && setAiSettings(savedSettings)} disabled={!isDirty || isSavingAI}>
+        <button type="button" className="btn btn-secondary" onClick={() => {
+          if (!savedSettings) return;
+          setAiSettings(savedSettings);
+          setIsModelSelectorDirty(false);
+          setModelSelectorResetKey(key => key + 1);
+        }} disabled={!(isDirty || isModelSelectorDirty) || isSavingAI}>
           Cancel
         </button>
         <button type="button" className="btn btn-primary" onClick={handleSaveAISettings} disabled={!isDirty || isSavingAI}>

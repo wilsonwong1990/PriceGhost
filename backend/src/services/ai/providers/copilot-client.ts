@@ -36,6 +36,10 @@ const JSON_SYSTEM_MESSAGE_SUFFIX = ' Reply with a single valid JSON value and no
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
 
 const AUTH_FAILURE_PATTERN = /\b401\b|bad credentials|not authenticated/i;
+const QUOTA_EXHAUSTED_MESSAGE_PATTERN =
+  /\b(?:quota|premium requests?|prepayment credits?|billing credits?)\b.{0,80}\b(?:exhausted|depleted|insufficient|exceeded|limit (?:reached|exceeded))\b|\b(?:exhausted|depleted|insufficient|exceeded|limit (?:reached|exceeded))\b.{0,80}\b(?:quota|premium requests?|credits?)\b/i;
+const QUOTA_EXHAUSTED_CODE_PATTERN =
+  /(?:quota|premium.?requests?|prepayment.?credits?|billing.?credits?).*(?:exhaust|deplet|insufficient|exceed|limit(?:[_-](?:reached|exceeded))?|used.?up)/i;
 /** The SDK's own wording for a runtime that has exited or whose connection has dropped. */
 const TRANSPORT_FAILURE_PATTERN =
   /\bclient (is )?not connected|\bclient disconnected|\bsession is disconnected|cli server (connection closed|exited)|connection (is|got) (closed|disposed)|\bepipe\b/i;
@@ -77,17 +81,68 @@ class CopilotValidationError extends Error {
   readonly statusCode = 400;
 }
 
+type CopilotFailureCategory =
+  | 'authentication'
+  | 'model_error'
+  | 'quota_exhausted'
+  | 'rate_limited'
+  | 'request_rejected'
+  | 'request_timeout'
+  | 'runtime_error'
+  | 'service_unavailable'
+  | 'upstream_error';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readCopilotErrorDetails(error: unknown) {
+  const root = isRecord(error) ? error : {};
+  const data = isRecord(root.data) ? root.data : {};
+  const rawStatus = data.status ?? data.statusCode ?? root.status ?? root.statusCode;
+  const status = typeof rawStatus === 'number' && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
+    ? rawStatus
+    : undefined;
+  const rawCode = data.code ?? root.code;
+  const code = typeof rawCode === 'string' && /^[a-z0-9_.-]{1,40}$/i.test(rawCode) ? rawCode : undefined;
+  const message = [root.message, data.message]
+    .filter((part): part is string => typeof part === 'string')
+    .join(' ');
+
+  return { status, code, message };
+}
+
+function classifyCopilotFailure(status: number | undefined, code: string | undefined, message: string): CopilotFailureCategory {
+  if (QUOTA_EXHAUSTED_MESSAGE_PATTERN.test(message) || QUOTA_EXHAUSTED_CODE_PATTERN.test(code || '')) {
+    return 'quota_exhausted';
+  }
+  if (status === 401 || AUTH_FAILURE_PATTERN.test(message)) return 'authentication';
+  if (/timeout|timed out/i.test(message)) return 'request_timeout';
+  if (status === 429) return 'rate_limited';
+  if (status === 503) return 'service_unavailable';
+  if (status && status >= 500) return 'upstream_error';
+  if (status && status >= 400) return 'request_rejected';
+  if (/\bmodel\b/i.test(code || message)) return 'model_error';
+  return 'runtime_error';
+}
+
 class CopilotRuntimeError extends Error {
   readonly status?: number;
   readonly code?: string;
+  readonly failureCategory: CopilotFailureCategory;
+  readonly retryable: boolean;
 
-  constructor(error: unknown, message: string) {
-    super(/timeout|timed out/i.test(message) ? 'GitHub Copilot request timeout' : 'GitHub Copilot request failed', { cause: error });
-    if (typeof error === 'object' && error !== null) {
-      if ('status' in error && typeof error.status === 'number') this.status = error.status;
-      else if ('statusCode' in error && typeof error.statusCode === 'number') this.status = error.statusCode;
-      if ('code' in error && typeof error.code === 'string') this.code = error.code;
-    }
+  constructor(details: ReturnType<typeof readCopilotErrorDetails>) {
+    const failureCategory = classifyCopilotFailure(details.status, details.code, details.message);
+    const message = failureCategory === 'request_timeout'
+      ? 'GitHub Copilot request timeout'
+      : `GitHub Copilot request failed (${failureCategory}${details.status ? `, HTTP ${details.status}` : ''})`;
+    super(message);
+    this.name = 'CopilotRuntimeError';
+    this.status = details.status;
+    this.code = details.code;
+    this.failureCategory = failureCategory;
+    this.retryable = failureCategory !== 'quota_exhausted';
   }
 }
 
@@ -294,14 +349,14 @@ async function withClient<T>(
 
 /** Replaces SDK and runtime failure text with guidance the admin can act on. */
 function toCopilotError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  if (AUTH_FAILURE_PATTERN.test(message)) {
+  const details = readCopilotErrorDetails(error);
+  if (details.status === 401 || AUTH_FAILURE_PATTERN.test(details.message)) {
     return new CopilotValidationError(
       'GitHub rejected the token. Use a fine-grained personal access token with the ' +
       '"Copilot Requests" permission from an account with an active Copilot subscription.'
     );
   }
-  return error instanceof CopilotValidationError ? error : new CopilotRuntimeError(error, message);
+  return error instanceof CopilotValidationError ? error : new CopilotRuntimeError(details);
 }
 
 /**

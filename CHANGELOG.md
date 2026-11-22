@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Copilot requests and model discovery now time out, honor environment
   telemetry opt-outs, and show actionable token errors and premium-request
   costs in Admin. Stored GitHub tokens are write-only.
+- Copilot failures retain safe status categories for retry and logging. Custom
+  model identifiers can be edited without losing focus, and Cancel remains
+  available when only the picker mode differs from the saved model.
 
 ## [2.2.0-beta.3] - 2026-11-15
 

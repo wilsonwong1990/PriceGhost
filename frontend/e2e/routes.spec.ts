@@ -295,6 +295,38 @@ test('initializes an existing Copilot configuration without overwriting an expli
   await expect(page.getByPlaceholder('auto')).toHaveValue('my-model');
 });
 
+test('keeps custom model editing active through known identifiers and resets on Cancel', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  await page.route('**/api/admin/settings/ai', async route => {
+    await route.fulfill({ json: { ai_provider: 'copilot', copilot_model: 'auto', copilot_api_key: 'test-token' } });
+  });
+  await page.goto('/admin/ai');
+
+  const model = page.locator('select').filter({ has: page.locator('option[value="fusion"]') });
+  await model.selectOption('__custom__');
+  const editor = page.getByPlaceholder('auto');
+  await editor.fill('');
+  await expect(editor).toBeVisible();
+  await editor.pressSequentially('auto-router');
+  await expect(editor).toHaveValue('auto-router');
+  await expect(editor).toBeFocused();
+
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(model).toHaveValue('auto');
+  await expect(editor).not.toBeVisible();
+
+  await model.selectOption('__custom__');
+  await editor.fill('auto');
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(model).toHaveValue('auto');
+  await expect(editor).not.toBeVisible();
+});
+
 test('saves and verifies Copilot routing choices without losing the previous tier', async ({ page }) => {
   await page.addInitScript((user) => {
     localStorage.setItem('token', 'acceptance-token');
