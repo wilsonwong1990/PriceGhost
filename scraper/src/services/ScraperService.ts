@@ -1,12 +1,74 @@
 import { log } from '../utils/logger.js';
 import { performHumanLikeActions } from '../core/Actions.js';
-import type { BrowserSession, ScrapeOptions, ScrapeResult, ScraperPage } from '../types.js';
+import type { BrowserSession, LogContext, ScrapeOptions, ScrapeResult, ScraperPage } from '../types.js';
 import { errorMessage } from '../types.js';
 import { parseUserAgent, buildUserAgentMetadata, legacyPlatformFor } from '../utils/userAgent.js';
 import { DEFAULT_SCRAPER_USER_AGENT } from '../core/SessionManager.js';
 import { buildChallengePattern, looksLikeChallenge } from '../utils/challenge.js';
 import { allocateScrapeBudget, createBudgetClock, CHALLENGE_POLL_INTERVAL_MS } from '../utils/budget.js';
 import { waitForChallengeToClear } from '../utils/challengeWait.js';
+
+/**
+ * Chromium identity is applied per page over CDP: the User-Agent, its client
+ * hints and Accept-Language, then the media features a desktop browser reports.
+ */
+async function prepareChromiumPage(page: ScraperPage, options: ScrapeOptions, context: LogContext): Promise<void> {
+  const targetUa = options.userAgent || DEFAULT_SCRAPER_USER_AGENT;
+  if (context.forceDebug) log(`Applying User-Agent: ${targetUa}`, 'DEBUG', context);
+  const identity = parseUserAgent(targetUa);
+  const metadata = buildUserAgentMetadata(identity);
+
+  try {
+    const client = await page.target().createCDPSession();
+    await client.send('Network.setUserAgentOverride', {
+      userAgent: targetUa,
+      acceptLanguage: options.acceptLanguage || 'en-US,en;q=0.9',
+      platform: legacyPlatformFor(identity.platform),
+      userAgentMetadata: metadata
+    });
+  } catch (cdpErr) {
+    log(`CDP UserAgentOverride notice: ${errorMessage(cdpErr)}`, 'DEBUG', context);
+  }
+
+  if (metadata) {
+    await page.setUserAgent(targetUa, metadata);
+  } else {
+    if (context.forceDebug) log(`No client hints for ${identity.family} UA`, 'DEBUG', context);
+    await page.setUserAgent(targetUa);
+  }
+
+  if (options.referrer) {
+    log(`Setting referrer: ${options.referrer}`, 'DEBUG', context);
+    await page.setExtraHTTPHeaders({ 'Referer': options.referrer });
+  }
+
+  await page.setViewport({ width: 1920, height: 1080 });
+  await page.emulateMediaFeatures([
+    { name: 'prefers-color-scheme', value: 'light' },
+    { name: 'prefers-reduced-motion', value: 'no-preference' }
+  ]);
+}
+
+/**
+ * Firefox's identity was fixed at launch (see `core/engine.ts`), so only what
+ * BiDi can set per page is applied here. CDP sessions, client hints and media
+ * emulation do not exist on BiDi and are skipped rather than attempted.
+ */
+async function prepareFirefoxPage(page: ScraperPage, options: ScrapeOptions, context: LogContext): Promise<void> {
+  if (options.referrer) {
+    // BiDi ignores `goto`'s `referer` option, so the header is the only way to
+    // send one. An older Firefox without `network.setExtraHeaders` loses the
+    // referrer rather than the scrape.
+    log(`Setting referrer: ${options.referrer}`, 'DEBUG', context);
+    try {
+      await page.setExtraHTTPHeaders({ 'Referer': options.referrer });
+    } catch (error) {
+      log(`Firefox could not set the referrer: ${errorMessage(error)}`, 'DEBUG', context);
+    }
+  }
+
+  await page.setViewport({ width: 1920, height: 1080 });
+}
 
 export class ScraperService {
   /**
@@ -64,40 +126,11 @@ export class ScraperService {
         abortSignal.addEventListener('abort', onAbort);
       }
 
-      const targetUa = options.userAgent || DEFAULT_SCRAPER_USER_AGENT;
-      if (context.forceDebug) log(`Applying User-Agent: ${targetUa}`, 'DEBUG', context);
-      const identity = parseUserAgent(targetUa);
-      const metadata = buildUserAgentMetadata(identity);
-
-      try {
-        const client = await page.target().createCDPSession();
-        await client.send('Network.setUserAgentOverride', {
-          userAgent: targetUa,
-          acceptLanguage: options.acceptLanguage || 'en-US,en;q=0.9',
-          platform: legacyPlatformFor(identity.platform),
-          userAgentMetadata: metadata
-        });
-      } catch (cdpErr) {
-        log(`CDP UserAgentOverride notice: ${errorMessage(cdpErr)}`, 'DEBUG', context);
-      }
-
-      if (metadata) {
-        await page.setUserAgent(targetUa, metadata);
+      if (session.browserEngine === 'firefox') {
+        await prepareFirefoxPage(page, options, context);
       } else {
-        if (context.forceDebug) log(`No client hints for ${identity.family} UA`, 'DEBUG', context);
-        await page.setUserAgent(targetUa);
+        await prepareChromiumPage(page, options, context);
       }
-
-      if (options.referrer) {
-        log(`Setting referrer: ${options.referrer}`, 'DEBUG', context);
-        await page.setExtraHTTPHeaders({ 'Referer': options.referrer });
-      }
-
-      await page.setViewport({ width: 1920, height: 1080 });
-      await page.emulateMediaFeatures([
-        { name: 'prefers-color-scheme', value: 'light' },
-        { name: 'prefers-reduced-motion', value: 'no-preference' }
-      ]);
 
       if (abortSignal?.aborted) return null;
 
@@ -228,7 +261,7 @@ export class ScraperService {
         screenshotBase64 = await page.screenshot({ encoding: 'base64', fullPage: false });
       }
 
-      return { html, screenshotBase64, challengeDetected, challengeUnresolved };
+      return { html, screenshotBase64, challengeDetected, challengeUnresolved, browserEngine: session.browserEngine };
 
     } catch (error) {
       if (!abortSignal?.aborted) {

@@ -92,18 +92,23 @@ pool, so every scrape came back as "all browser instances at capacity".
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `MAX_BROWSERS` | Maximum concurrent Chromium processes. The main lever for memory: each browser is a separate process with its own renderer children. Lower it to `1` on a 1–2 GB VPS. | `3` |
+| `MAX_BROWSERS` | Maximum concurrent browser processes, Chromium and Firefox together. The main lever for memory: each browser is a separate process with its own renderer children. Lower it to `1` on a 1–2 GB VPS. | `3` |
 | `MAX_PAGES_PER_BROWSER` | Maximum concurrent tabs per browser process. Raising it increases throughput per browser at the cost of per-process memory. | `4` |
 | `MAX_SCRAPES_PER_BROWSER` | Scrapes a browser serves before it is recycled, to reclaim the memory Chromium does not return. | `50` |
 | `IDLE_TIMEOUT_MS` | Idle time, in milliseconds, before an unused browser is closed. | `300000` (5 minutes) |
 | `ENABLE_ADBLOCKER` | Set to `false` to disable the built-in adblocker. It runs with `blockTrackers: false` so anti-bot verification scripts (Turnstile, Reese84, DataDome) can still report their telemetry; disable it entirely only when adblocking interferes with rendering. | `true` |
-| `PROFILE_BASE_DIR` | Base directory for Chromium's per-session profiles. Set it to a path under `/dev/shm` to trade RAM for disk I/O. The default lives under the container's `/tmp`, which `docker-compose.yaml` and `deploy/swarm-stack.yml` back with a capped `tmpfs` so leaked profiles cannot fill the node's overlay storage (issue #52). | `<os tmpdir>/scraper-profiles` |
+| `PROFILE_BASE_DIR` | Base directory for each browser session's profile. Set it to a path under `/dev/shm` to trade RAM for disk I/O. The default lives under the container's `/tmp`, which `docker-compose.yaml` and `deploy/swarm-stack.yml` back with a capped `tmpfs` so leaked profiles cannot fill the node's overlay storage (issue #52). | `<os tmpdir>/scraper-profiles` |
+| `FIREFOX_EXECUTABLE_PATH` | Firefox binary used for retailers whose browser engine is `firefox`. The scraper image installs Firefox ESR and sets this; override it only when running the scraper outside that image. | `/usr/bin/firefox-esr` |
+
+`ENABLE_ADBLOCKER` applies to Chromium only. Firefox sessions do not load the
+stealth or ad-block plugins.
 
 `docker-compose.yaml` and `deploy/swarm-stack.yml` both pass these through from
 `SCRAPER_`-prefixed host variables (`SCRAPER_MAX_BROWSERS`, `SCRAPER_MAX_PAGES`,
 `SCRAPER_MAX_SCRAPES`, `SCRAPER_IDLE_TIMEOUT_MS`, `SCRAPER_ENABLE_ADBLOCKER`,
 `SCRAPER_PROFILE_BASE_DIR`), so set the prefixed names in `.env` rather than
-editing the compose files.
+editing the compose files. `FIREFOX_EXECUTABLE_PATH` is not in that list: the
+scraper image sets it, so it needs no host variable.
 
 ### Per-scrape options, which are not environment variables
 

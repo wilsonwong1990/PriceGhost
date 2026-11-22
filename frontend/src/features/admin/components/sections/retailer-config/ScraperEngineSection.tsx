@@ -1,4 +1,4 @@
-import { RetailerConfig } from '../../../../../types/api';
+import { RetailerConfig, RetailerBrowserEngine } from '../../../../../types/api';
 import ToggleSwitch from '../../../../../components/ToggleSwitch';
 import { PRESET_USER_AGENTS } from '../../index';
 
@@ -34,6 +34,26 @@ export default function ScraperEngineSection({ draftConfig, onUpdateConfig }: Sc
           />
         </div>
       </div>
+
+      {draftConfig.use_browser_scraper && (
+        <div className="form-group">
+          <label htmlFor="browser-engine">Browser Engine</label>
+          <select
+            id="browser-engine"
+            className="form-control"
+            value={draftConfig.browser_engine || 'chromium'}
+            onChange={e => onUpdateConfig({ browser_engine: e.target.value as RetailerBrowserEngine })}
+          >
+            <option value="chromium">Chromium (default)</option>
+            <option value="firefox">Firefox</option>
+          </select>
+          <small style={{ color: 'var(--text-muted)' }}>
+            Try Firefox for retailers whose bot protection blocks Chromium; it may
+            get through, but is not guaranteed to. Firefox keeps its own User Agent unless a Firefox one is set below, does not use
+            the stealth or ad-block plugins, and ignores proxy credentials.
+          </small>
+        </div>
+      )}
       
       <div className="form-group">
         <label>User Agent Profile</label>

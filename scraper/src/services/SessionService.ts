@@ -27,6 +27,7 @@ export class SessionService {
       totalActivePages: sessions.reduce((sum, s) => sum + s.activePages, 0),
       sessions: sessions.map(s => ({
         id: s.id,
+        browserEngine: s.browserEngine,
         activePages: s.activePages,
         totalScrapes: s.totalScrapes,
         proxyUrl: s.proxyUrl ? scrubUrlCredentials(s.proxyUrl) : null,

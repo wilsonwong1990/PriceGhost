@@ -64,6 +64,7 @@ export default function Debug() {
         name: state.result.retailerName,
         use_proxy: state.config.use_proxy,
         use_browser_scraper: state.config.use_browser_scraper,
+        browser_engine: state.config.browser_engine,
         user_agent: state.config.user_agent,
         price_selectors: state.tempPriceSelectors,
         retailer_name_selectors: state.tempRetailerNameSelectors,

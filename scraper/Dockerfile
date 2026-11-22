@@ -25,7 +25,7 @@ COPY scraper/tsconfig.json ./scraper/
 
 # Chromium is installed via apt in the runtime stage, so Puppeteer must not
 # also download its own copy -- that would add several hundred MB per arch.
-# Puppeteer 22 recognises PUPPETEER_SKIP_DOWNLOAD; retain the older variable
+# Puppeteer recognises PUPPETEER_SKIP_DOWNLOAD; retain the older variable
 # for compatibility with packages that still read it.
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_SKIP_DOWNLOAD=true
@@ -41,6 +41,8 @@ RUN pnpm --filter stealth-scraper run build
 FROM node:24.18.0-slim AS runtime
 
 # Chromium plus the font packages Puppeteer needs to render non-Latin pages.
+# Firefox ESR backs the optional per-retailer Firefox engine, for retailers whose
+# bot manager walls headless Chromium; Puppeteer drives it over WebDriver BiDi.
 #
 # `tini` is not optional. Chromium forks a tree of helper processes (zygote,
 # renderers, GPU) and re-parents the survivors onto PID 1 when they are killed.
@@ -51,6 +53,7 @@ FROM node:24.18.0-slim AS runtime
 RUN apt-get update \
     && apt-get install -y \
       chromium \
+      firefox-esr \
       tini \
       fonts-ipafont-gothic \
       fonts-wqy-zenhei \
@@ -80,6 +83,7 @@ USER node
 WORKDIR /app/scraper
 
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    FIREFOX_EXECUTABLE_PATH=/usr/bin/firefox-esr \
     NODE_ENV=production \
     PORT=5100 \
     TINI_SUBREAPER=1

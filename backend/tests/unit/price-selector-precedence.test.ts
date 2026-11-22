@@ -61,6 +61,7 @@ function makeConfig(overrides: Partial<RetailerConfig>): RetailerConfig {
     status_history: [],
     use_proxy: false,
     use_browser_scraper: true,
+    browser_engine: 'chromium',
     currency_hint: 'EUR',
     name_selectors: [],
     retailer_name_selectors: [],

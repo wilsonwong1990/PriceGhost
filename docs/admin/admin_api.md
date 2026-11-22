@@ -180,7 +180,7 @@ pass an explicit list to narrow the token. An unknown scope is rejected with
 ```
 
 * **`mode`**: Choose `"scraper"` (run full pipeline) or `"bypass"` (run direct local axios request).
-* **`config`**: Override scraper configs (e.g. `use_browser_scraper`, `use_proxy`).
+* **`config`**: Override scraper configs (e.g. `use_browser_scraper`, `browser_engine`, `use_proxy`).
 * **`use_ai`**: Set to `true` to allow AI extraction fallback on failure.
 * **`returnHtml`**: Set to `true` to return the raw HTML string inside the response payload.
 </details>

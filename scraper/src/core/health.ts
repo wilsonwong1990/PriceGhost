@@ -12,10 +12,15 @@
  * `browser.newPage()` failed with `ProtocolError: Network.enable timed out`
  * for every one of them until the idle timer eventually closed it.
  *
- * So the check is a real CDP round trip. `Browser.getVersion` is the cheapest
- * command there is -- it is answered by the browser process itself, needs no
- * page or target, and changes no state -- which makes it a liveness probe
- * rather than a flag that has gone stale.
+ * So the check is a real protocol round trip: reading the default context's
+ * cookies (`Storage.getCookies`). It is answered by the browser process
+ * itself, needs no page or target, and changes no state, which makes it a
+ * liveness probe rather than a flag that has gone stale.
+ *
+ * It used to be `Browser.getVersion`, via `browser.version()`. Puppeteer 25
+ * caches that answer after the first call, so on a long-lived pooled browser
+ * it no longer reaches the browser at all and would report a wedged session
+ * as healthy -- the exact failure this module exists to catch.
  */
 
 import type { BrowserSession } from '../types.js';
@@ -38,7 +43,7 @@ export interface ProbeProcess {
 /** The part of a Puppeteer `Browser` this needs. */
 export interface CdpProbeTarget {
   readonly connected: boolean;
-  version(): Promise<string>;
+  cookies(): Promise<unknown>;
   process(): ProbeProcess | null;
 }
 
@@ -52,7 +57,7 @@ export function isProcessGone(proc: ProbeProcess | null | undefined): boolean {
  * Sends one CDP command and reports whether it was answered in time.
  *
  * Never throws and never leaves a timer behind. A rejected command counts as
- * dead: `Browser.getVersion` does not fail on a browser that is working.
+ * dead: `Storage.getCookies` does not fail on a browser that is working.
  */
 export async function probeCdp(
   target: CdpProbeTarget,
@@ -63,7 +68,7 @@ export async function probeCdp(
 
   let timer: NodeJS.Timeout | undefined;
   try {
-    const answered = target.version().then(
+    const answered = target.cookies().then(
       () => true,
       () => false
     );

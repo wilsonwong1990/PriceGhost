@@ -128,3 +128,28 @@ describe('the browser path always sends a User-Agent', () => {
     expect(overrideSteps.some(s => s.includes('Scraper | Remote | UA: Custom'))).toBe(true);
   });
 });
+
+describe('the browser path asks for the retailer engine', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sends nothing for a Chromium retailer, so the request is unchanged', async () => {
+    const options = await requestOptions(config({ use_browser_scraper: true, browser_engine: 'chromium' }));
+    expect(options).not.toHaveProperty('browserEngine');
+  });
+
+  it('asks for Firefox for a Firefox retailer and says so in the trace', async () => {
+    const steps: string[] = [];
+    await acquireRemoteHtml({
+      url: 'https://www.example.com/itm/000000000000',
+      domain: 'example.com',
+      domainConfig: config({ use_browser_scraper: true, browser_engine: 'firefox' }),
+      extractionSteps: steps,
+    });
+
+    const [, , options] = vi.mocked(fetchRemoteHtml).mock.calls[0];
+    expect((options as Record<string, unknown>).browserEngine).toBe('firefox');
+    expect(steps.some(s => s.includes('| Engine: Firefox'))).toBe(true);
+  });
+});

@@ -7,7 +7,7 @@ import {
   probeCdp,
   type CdpProbeTarget,
 } from '../../../scraper/src/core/health';
-import { findReusableSession, isSessionEligible } from '../../../scraper/src/core/pool';
+import { findReusableSession, isSessionEligible, type PoolMatch } from '../../../scraper/src/core/pool';
 import type { BrowserSession } from '../../../scraper/src/types';
 
 /**
@@ -31,10 +31,10 @@ function fakeBrowser(
   return {
     connected: options.connected ?? true,
     process: () => (options.exited ? { exitCode: 1, signalCode: null } : { exitCode: null, signalCode: null }),
-    version: () => {
-      if (answers === 'hangs') return new Promise<string>(() => {});
-      if (answers === false) return Promise.reject(new Error('Protocol error (Browser.getVersion): Target closed'));
-      return Promise.resolve('HeadlessChrome/154.0.0.0');
+    cookies: () => {
+      if (answers === 'hangs') return new Promise<unknown>(() => {});
+      if (answers === false) return Promise.reject(new Error('Protocol error (Storage.getCookies): Target closed'));
+      return Promise.resolve([]);
     },
   };
 }
@@ -49,6 +49,7 @@ function fakeSession(over: Partial<BrowserSession> = {}): BrowserSession {
     idleTimer: null,
     proxyUrl: 'http://192.168.50.200:8888',
     userAgent: null,
+    browserEngine: 'chromium',
     lastActivity: Date.now(),
     userDataDir: '/tmp/scraper-profiles/session_1791872680287_335',
     tainted: false,
@@ -89,6 +90,20 @@ describe('probeCdp', () => {
     const verdict = probeCdp(fakeBrowser({ answers: 'hangs' }));
 
     // This is the #254 state exactly: connected, process alive, CDP silent.
+    await vi.advanceTimersByTimeAsync(CDP_PROBE_TIMEOUT_MS);
+    await expect(verdict).resolves.toBe(false);
+  });
+
+  it('does not trust a cached version string for liveness', async () => {
+    // Puppeteer 25 caches `browser.version()` after the first call, so a
+    // wedged browser still "answers" it. The probe must use a command that
+    // reaches the browser every time.
+    vi.useFakeTimers();
+    const wedged = Object.assign(fakeBrowser({ answers: 'hangs' }), {
+      version: () => Promise.resolve('HeadlessChrome/154.0.0.0'),
+    });
+    const verdict = probeCdp(wedged);
+
     await vi.advanceTimersByTimeAsync(CDP_PROBE_TIMEOUT_MS);
     await expect(verdict).resolves.toBe(false);
   });
@@ -134,7 +149,7 @@ describe('isSessionResponsive', () => {
 });
 
 describe('isSessionEligible', () => {
-  const match = { proxyUrl: 'http://192.168.50.200:8888', userAgent: null };
+  const match: PoolMatch = { proxyUrl: 'http://192.168.50.200:8888', userAgent: null, browserEngine: 'chromium' };
 
   it('matches on proxy and User-Agent together', () => {
     expect(isSessionEligible(withBrowser(fakeSession(), fakeBrowser()), match, LIMITS)).toBe(true);
@@ -144,6 +159,13 @@ describe('isSessionEligible', () => {
     expect(
       isSessionEligible(withBrowser(fakeSession({ userAgent: 'Mozilla/5.0' }), fakeBrowser()), match, LIMITS)
     ).toBe(false);
+  });
+
+  it('never serves a request from a browser of another engine', () => {
+    const firefox = withBrowser(fakeSession({ browserEngine: 'firefox' }), fakeBrowser());
+
+    expect(isSessionEligible(firefox, match, LIMITS)).toBe(false);
+    expect(isSessionEligible(firefox, { ...match, browserEngine: 'firefox' }, LIMITS)).toBe(true);
   });
 
   it('excludes a tainted session even though everything else about it matches', () => {
@@ -169,7 +191,7 @@ describe('isSessionEligible', () => {
 });
 
 describe('findReusableSession (issue #254)', () => {
-  const match = { proxyUrl: 'http://192.168.50.200:8888', userAgent: null };
+  const match: PoolMatch = { proxyUrl: 'http://192.168.50.200:8888', userAgent: null, browserEngine: 'chromium' };
 
   it('does not hand a wedged session to the next request', async () => {
     const wedged = withBrowser(fakeSession({ id: 'wedged' }), fakeBrowser({ answers: 'hangs' }));

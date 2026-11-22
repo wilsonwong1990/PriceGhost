@@ -5,9 +5,10 @@ import { SessionService } from '../services/SessionService.js';
 import { IDLE_TIMEOUT, MAX_SCRAPES_PER_BROWSER, markSessionTainted } from '../core/SessionManager.js';
 import { isProtocolError } from '../core/health.js';
 import { scrapeOutcomeLog } from '../utils/outcome.js';
-import type { ScrapeOptions } from '../types.js';
+import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { scrubUrlCredentials } from '../utils/scrub.js';
+import { BrowserLaunchError, resolveBrowserEngine } from '../core/engine.js';
 
 const router = express.Router();
 
@@ -30,7 +31,19 @@ router.post('/scrape', async (req, res) => {
     return res.status(400).json({ error: 'URL is required' });
   }
 
-  const session = await SessionService.acquireSession(options);
+  const browserEngine = resolveBrowserEngine(options.browserEngine);
+  if (!browserEngine) {
+    return res.status(400).json({ error: `Unknown browserEngine: ${String(options.browserEngine)}` });
+  }
+
+  let session: BrowserSession | null;
+  try {
+    session = await SessionService.acquireSession({ ...options, browserEngine });
+  } catch (error) {
+    if (!(error instanceof BrowserLaunchError)) throw error;
+    log(`${error.message} for ${url}`, 'ERROR', context);
+    return res.status(500).json({ error: error.message });
+  }
   
   if (!session) {
     const status = SessionService.getPoolStatus();
@@ -43,7 +56,7 @@ router.post('/scrape', async (req, res) => {
   session.totalScrapes++;
   session.lastActivity = Date.now();
   
-  log(`Scraping: ${url} (Session: ${session.id}, Active: ${session.activePages}, Total: ${session.totalScrapes}) [Proxy: ${proxyForLog}, UA: ${options.userAgent || 'None'}, Ref: ${options.referrer || 'None'}]`, 'INFO', context);
+  log(`Scraping: ${url} (Session: ${session.id}, Active: ${session.activePages}, Total: ${session.totalScrapes}) [Engine: ${session.browserEngine}, Proxy: ${proxyForLog}, UA: ${options.userAgent || 'None'}, Ref: ${options.referrer || 'None'}]`, 'INFO', context);
 
   const abortController = new AbortController();
 

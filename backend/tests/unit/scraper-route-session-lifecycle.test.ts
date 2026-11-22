@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { sessions } from '../../../scraper/src/core/SessionManager';
 import type { BrowserSession, ScrapeResult } from '../../../scraper/src/types';
+import { BrowserLaunchError } from '../../../scraper/src/core/engine';
 
 /**
  * The scrape route's session lifecycle (issues #254, #255).
@@ -15,11 +16,15 @@ import type { BrowserSession, ScrapeResult } from '../../../scraper/src/types';
  * success.
  */
 
-const { scrape, releaseSession, acquired } = vi.hoisted(() => ({
-  scrape: vi.fn(),
-  releaseSession: vi.fn().mockResolvedValue(undefined),
-  acquired: { session: null as BrowserSession | null },
-}));
+const { scrape, releaseSession, acquireSession, acquired } = vi.hoisted(() => {
+  const acquired = { session: null as BrowserSession | null };
+  return {
+    scrape: vi.fn(),
+    releaseSession: vi.fn().mockResolvedValue(undefined),
+    acquireSession: vi.fn(async () => acquired.session),
+    acquired,
+  };
+});
 
 vi.mock('../../../scraper/src/services/ScraperService', () => ({
   ScraperService: { scrape },
@@ -27,7 +32,7 @@ vi.mock('../../../scraper/src/services/ScraperService', () => ({
 
 vi.mock('../../../scraper/src/services/SessionService', () => ({
   SessionService: {
-    acquireSession: vi.fn(async () => acquired.session),
+    acquireSession,
     releaseSession,
     getPoolStatus: () => ({ activeSessions: sessions.length, maxBrowsers: 3, totalActivePages: 0, sessions: [] }),
   },
@@ -49,6 +54,7 @@ const fakeSession = (): BrowserSession => ({
   idleTimer: null,
   proxyUrl: 'http://scraper:pa55word@192.168.50.200:8888',
   userAgent: null,
+  browserEngine: 'chromium',
   lastActivity: Date.now(),
   userDataDir: null,
   tainted: false,
@@ -60,6 +66,7 @@ const result = (over: Partial<ScrapeResult> = {}): ScrapeResult => ({
   screenshotBase64: null,
   challengeDetected: false,
   challengeUnresolved: false,
+  browserEngine: 'chromium',
   ...over,
 });
 
@@ -204,5 +211,46 @@ describe('the route never logs proxy credentials', () => {
     expect(logLines.some(line => line.includes('pa55word'))).toBe(false);
     expect(logLines.some(line => line.includes('[REDACTED]:[REDACTED]@192.168.50.200:8888'))).toBe(true);
     if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
+  });
+});
+
+describe('the route resolves the browser engine before taking a session', () => {
+  it('answers 400 for an engine the scraper does not have', async () => {
+    const response = await postScrape({
+      url: 'https://www.bigw.com.au/product/x/p/1',
+      options: { browserEngine: 'webkit' },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Unknown browserEngine: webkit' });
+    expect(acquireSession).not.toHaveBeenCalled();
+  });
+
+  it('asks the pool for Chromium when the request names no engine', async () => {
+    scrape.mockResolvedValue(result());
+
+    await postScrape({ url: 'https://www.bigw.com.au/product/x/p/1' });
+
+    expect(acquireSession).toHaveBeenCalledWith(expect.objectContaining({ browserEngine: 'chromium' }));
+    if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
+  });
+
+  it('answers 500, not the retryable 503, when the browser cannot launch', async () => {
+    // A missing Firefox binary is not a busy pool: retrying it three times
+    // with backoff, as the backend does for 503, cannot succeed.
+    acquireSession.mockRejectedValueOnce(
+      new BrowserLaunchError('firefox', new Error('Browser was not found at the configured executablePath'))
+    );
+
+    const response = await postScrape({
+      url: 'https://www.bigw.com.au/product/x/p/1',
+      options: { browserEngine: 'firefox' },
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Could not launch firefox: Browser was not found at the configured executablePath',
+    });
+    expect(scrape).not.toHaveBeenCalled();
   });
 });

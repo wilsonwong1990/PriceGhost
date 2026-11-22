@@ -12,7 +12,7 @@
     "axios": "1.14.0",
     "express": "^4.19.2",
     "jsdom": "^29.0.2",
-    "puppeteer": "^22.6.0",
+    "puppeteer": "^25.18.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-adblocker": "^2.13.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"

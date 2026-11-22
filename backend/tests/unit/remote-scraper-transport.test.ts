@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
-import { fetchRemoteHtml } from '../../src/services/scraper/transport/remote';
+import { BrowserEngineMismatchError, fetchRemoteHtml } from '../../src/services/scraper/transport/remote';
 import { logger } from '../../src/utils/system/logger';
 
 vi.mock('axios');
@@ -130,6 +130,29 @@ describe('fetchRemoteHtml', () => {
       expect.stringContaining('Busy | Retrying in 2000ms'),
       'Scraper'
     );
+  });
+
+  it('fails a Firefox request that an older scraper served with Chromium', async () => {
+    // An older scraper image ignores `browserEngine` and reports no engine.
+    // Accepting its page would hand back the wall Chromium was moved off.
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: { html: '<html>wall</html>' }, status: 200 });
+
+    const promise = fetchRemoteHtml('https://example.com/item', 'http://remotescraper:5100', { browserEngine: 'firefox' });
+
+    await expect(promise).rejects.toBeInstanceOf(BrowserEngineMismatchError);
+    await expect(promise).rejects.toThrow('served no engine instead of the requested firefox');
+    expect(axios.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a Firefox page the scraper reports serving with Firefox', async () => {
+    vi.mocked(axios.post).mockResolvedValueOnce({
+      data: { html: '<html>product</html>', browserEngine: 'firefox' },
+      status: 200,
+    });
+
+    await expect(
+      fetchRemoteHtml('https://example.com/item', 'http://remotescraper:5100', { browserEngine: 'firefox' })
+    ).resolves.toBe('<html>product</html>');
   });
 
   it('handles abort errors cleanly', async () => {

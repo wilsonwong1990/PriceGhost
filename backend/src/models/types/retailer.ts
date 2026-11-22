@@ -1,3 +1,11 @@
+/**
+ * Browsers the Browser Scraper can launch for a retailer. Mirrors
+ * `BROWSER_ENGINES` in `scraper/src/core/engine.ts`; the two services are
+ * deployed separately, so the list is not imported across them.
+ */
+export const RETAILER_BROWSER_ENGINES = ['chromium', 'firefox'] as const;
+export type RetailerBrowserEngine = (typeof RETAILER_BROWSER_ENGINES)[number];
+
 export interface RetailerConfig {
   id: number;
   domain: string;
@@ -6,6 +14,8 @@ export interface RetailerConfig {
   status_history: { status: string; timestamp: string }[];
   use_proxy: boolean;
   use_browser_scraper: boolean;
+  /** Browser the Browser Scraper launches for this retailer. */
+  browser_engine: RetailerBrowserEngine;
   currency_hint: string | null;
   name_selectors: string[];
   retailer_name_selectors: string[];

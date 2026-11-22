@@ -1,7 +1,20 @@
-import { retailerRepository, RetailerConfig } from '../../../models';
+import { retailerRepository, RetailerConfig, RETAILER_BROWSER_ENGINES } from '../../../models';
 import { configCache } from '../../../utils/cache';
 import { logger } from '../../../utils/system/logger';
 import { RetailerQueryService } from './RetailerQueryService';
+
+/**
+ * Carries `statusCode` so `asyncHandler` answers 400 with this message rather
+ * than letting the database CHECK constraint surface as a generic 500.
+ */
+export class InvalidBrowserEngineError extends Error {
+  readonly statusCode = 400;
+
+  constructor(value: unknown) {
+    super(`browser_engine must be one of: ${RETAILER_BROWSER_ENGINES.join(', ')} (got ${JSON.stringify(value)})`);
+    this.name = 'InvalidBrowserEngineError';
+  }
+}
 
 export class RetailerMutationService {
   constructor(private queryService: RetailerQueryService) {}
@@ -14,6 +27,10 @@ export class RetailerMutationService {
     if (!domain) {
       throw new Error('Domain is required');
     }
+    const engine = config.browser_engine;
+    if (engine != null && !(RETAILER_BROWSER_ENGINES as readonly unknown[]).includes(engine)) {
+      throw new InvalidBrowserEngineError(engine);
+    }
 
     const updated = await retailerRepository.upsert({ ...config, forceNameRemoval });
 
@@ -24,7 +41,7 @@ export class RetailerMutationService {
       `Name: ${updated.name || 'Unknown'}`,
       `Domain: ${updated.domain}`,
       `Active: ${updated.active ? 'Yes' : 'No'}`,
-      `Engine: ${updated.use_browser_scraper ? 'Browser Scraper' : 'Standard (HTTP)'}`
+      `Engine: ${updated.use_browser_scraper ? `Browser Scraper (${updated.browser_engine})` : 'Standard (HTTP)'}`
     ];
     if (updated.name_selectors?.length > 0) manualTrace.push(`Name Selectors: ${JSON.stringify(updated.name_selectors)}`);
     if (updated.price_selectors?.length > 0) manualTrace.push(`Price Selectors: ${JSON.stringify(updated.price_selectors)}`);

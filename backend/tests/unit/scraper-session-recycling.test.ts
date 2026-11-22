@@ -4,9 +4,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CDP_PROBE_TIMEOUT_MS } from '../../../scraper/src/core/health';
+import { BrowserLaunchError } from '../../../scraper/src/core/engine';
 import {
   closeSession,
+  getBrowserSession,
   markSessionTainted,
+  MAX_BROWSERS,
   sessions,
   sweepSessions,
   STUCK_SESSION_TIMEOUT_MS,
@@ -71,10 +74,10 @@ function fakeBrowser(options: FakeBrowserOptions = {}): { browser: PuppeteerBrow
   const proc = fakeProcess(options);
   const browser = {
     connected: options.connected ?? true,
-    version: () =>
+    cookies: () =>
       options.answersCdp === false
-        ? new Promise<string>(() => {})
-        : Promise.resolve('HeadlessChrome/154.0.0.0'),
+        ? new Promise<unknown>(() => {})
+        : Promise.resolve([]),
     process: () => proc,
     close: () => {
       if (mode === 'hangs') return new Promise<void>(() => {});
@@ -102,6 +105,7 @@ async function sessionWithProfile(over: Partial<BrowserSession> = {}): Promise<B
     idleTimer: null,
     proxyUrl: 'http://192.168.50.200:8888',
     userAgent: null,
+    browserEngine: 'chromium',
     lastActivity: Date.now(),
     userDataDir: dir,
     tainted: false,
@@ -129,6 +133,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   sessions.splice(0, sessions.length);
 });
 
@@ -246,5 +251,44 @@ describe('sweepSessions (issue #254)', () => {
     expect(sessions).toContain(busy);
     expect(sessions).not.toContain(stuck);
     await closeSession(busy);
+  });
+});
+
+describe('a Firefox request that cannot launch does not evict a pooled session', () => {
+  it.each([
+    ['an https:// proxy', { proxyUrl: 'https://proxy.example.com:8443' }, undefined],
+    ['a missing Firefox binary', {}, path.join(os.tmpdir(), 'pricestalker-no-such-firefox')],
+  ])('rejects %s before recycling an idle session', async (_case, options, executablePath) => {
+    vi.stubEnv('FIREFOX_EXECUTABLE_PATH', executablePath ?? process.execPath);
+    const pooled: BrowserSession[] = [];
+    for (let i = 0; i < MAX_BROWSERS; i++) {
+      pooled.push(await sessionWithProfile());
+    }
+
+    await expect(getBrowserSession({ browserEngine: 'firefox', ...options })).rejects.toBeInstanceOf(
+      BrowserLaunchError,
+    );
+
+    expect(sessions).toHaveLength(MAX_BROWSERS);
+    for (const session of pooled) {
+      expect(sessions).toContain(session);
+      await closeSession(session);
+    }
+  });
+
+  it('raises the launch error, not a retryable null, to a request that joined a failing launch', async () => {
+    const launch = Promise.reject(new Error('Failed to launch the browser process'));
+    launch.catch(() => {});
+    const launching = await sessionWithProfile({
+      browser: null,
+      launchPromise: launch,
+      browserEngine: 'firefox',
+      proxyUrl: null,
+    });
+
+    await expect(getBrowserSession({ browserEngine: 'firefox' })).rejects.toBeInstanceOf(BrowserLaunchError);
+
+    expect(launching.activePages).toBe(0);
+    await closeSession(launching);
   });
 });

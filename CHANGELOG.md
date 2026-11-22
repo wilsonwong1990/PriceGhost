@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A per-retailer **Browser Engine** setting (Admin > Retailers, shown when the
+  Browser Scraper is on) that switches a retailer from Chromium to Firefox.
+  Some bot protection, such as Akamai Bot Manager on certain marketplaces,
+  denies every Chromium variant the scraper can present but may let Firefox
+  through. The scraper image now ships Firefox ESR and pools browsers per
+  engine. Firefox does not use the stealth or ad-block plugins, reports
+  `navigator.webdriver` as true, keeps its own User-Agent unless a Firefox
+  one is configured, and, like Chromium, does not apply proxy credentials.
+  Its background remote-settings fetches to Mozilla are disabled. Chromium stays the default and its requests are
+  unchanged. A backend asking for Firefox from an older scraper image fails
+  that scrape with a message to update the scraper rather than accept a
+  Chromium page. Adds migration 026. The Debug page can run and save the
+  engine too.
+
+### Changed
+
+- The Browser Scraper now runs on Puppeteer 25 (up from 22). Chromium
+  behaviour is unchanged: the stealth and ad-blocker plugins still load, and
+  pages still report a non-headless user agent with `navigator.webdriver`
+  false. The upgrade is the prerequisite for the Firefox browser engine,
+  which needs Puppeteer's WebDriver BiDi support.
+- The pooled-browser liveness check (#254) now reads the browser's cookies
+  instead of its version string. Puppeteer 25 caches `browser.version()`
+  after the first call, so on the new Puppeteer that check would have
+  stopped reaching the browser and reported a wedged session as healthy.
+
 ## [2.2.0-beta.3] - 2026-11-15
 
 ### Added
