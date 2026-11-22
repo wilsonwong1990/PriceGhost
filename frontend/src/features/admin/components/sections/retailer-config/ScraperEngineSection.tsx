@@ -49,8 +49,9 @@ export default function ScraperEngineSection({ draftConfig, onUpdateConfig }: Sc
           </select>
           <small style={{ color: 'var(--text-muted)' }}>
             Try Firefox for retailers whose bot protection blocks Chromium; it may
-            get through, but is not guaranteed to. Firefox keeps its own User Agent unless a Firefox one is set below, does not use
-            the stealth or ad-block plugins, and ignores proxy credentials.
+            get through, but is not guaranteed to. Firefox keeps its own User Agent
+            unless a Firefox one is set below, does not use the stealth or ad-block
+            plugins, and ignores proxy credentials.
           </small>
         </div>
       )}
