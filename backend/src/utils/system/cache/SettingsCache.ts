@@ -190,6 +190,8 @@ export class SystemSettingsCache {
       openrouter_model: all.openrouter_model || null,
       copilot_api_key: all.copilot_api_key || null,
       copilot_model: all.copilot_model || null,
+      copilot_auto_tier: all.copilot_auto_tier || null,
+      copilot_fusion_tier: all.copilot_fusion_tier || null,
       openai_compatible_base_url: all.openai_compatible_base_url || null,
       openai_compatible_api_key: all.openai_compatible_api_key || null,
       openai_compatible_model: all.openai_compatible_model || null,

@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AIModel } from '../../../../types/api';
 import Icon from '../../../../components/Icon';
+
+const NO_BUILT_IN_MODELS: AIModel[] = [];
 
 interface ModelSelectorProps {
   providerName: string;
@@ -8,6 +10,7 @@ interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
   models: AIModel[];
+  builtInModels?: AIModel[];
   onSync: () => void | Promise<void>;
   isSyncing: boolean;
   canSync: boolean;
@@ -21,22 +24,28 @@ export default function ModelSelector({
   value,
   onChange,
   models,
+  builtInModels = NO_BUILT_IN_MODELS,
   onSync,
   isSyncing,
   canSync,
   syncDisabledTooltip = 'Enter credentials before syncing',
   customPlaceholder = 'Enter custom model identifier...',
 }: ModelSelectorProps) {
+  const choices = [...builtInModels, ...models.filter(model => !builtInModels.some(builtIn => builtIn.id === model.id))];
   // Determine if the current value is not among the discovered models
-  const isValueKnown = models.some(m => m.id === value);
+  const isValueKnown = choices.some(m => m.id === value);
   const [isCustomMode, setIsCustomMode] = useState<boolean>(!isValueKnown && Boolean(value));
+  const previousValue = useRef(value);
 
   // Keep custom mode in sync if value or models change externally
   useEffect(() => {
-    if (value && !models.some(m => m.id === value)) {
+    if (value && !choices.some(m => m.id === value)) {
       setIsCustomMode(true);
+    } else if (value !== previousValue.current) {
+      setIsCustomMode(false);
     }
-  }, [value, models]);
+    previousValue.current = value;
+  }, [value, models, builtInModels]);
 
   const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = e.target.value;
@@ -69,7 +78,7 @@ export default function ModelSelector({
           onChange={handleSelectChange}
         >
           <option value="" disabled>Select a model...</option>
-          {models.map(m => (
+          {choices.map(m => (
             <option key={m.id} value={m.id}>
               {m.name || m.id}
             </option>

@@ -49,6 +49,8 @@ export const systemSettingsRepository = {
       openrouter_model: all.openrouter_model || null,
       copilot_api_key: all.copilot_api_key || null,
       copilot_model: all.copilot_model || null,
+      copilot_auto_tier: all.copilot_auto_tier || null,
+      copilot_fusion_tier: all.copilot_fusion_tier || null,
       openai_compatible_base_url: all.openai_compatible_base_url || null,
       openai_compatible_api_key: all.openai_compatible_api_key || null,
       openai_compatible_model: all.openai_compatible_model || null,
@@ -88,6 +90,8 @@ export const systemSettingsRepository = {
     if (settings.openrouter_model !== undefined) await systemSettingsRepository.set('openrouter_model', settings.openrouter_model || '');
     if (settings.copilot_api_key !== undefined) await systemSettingsRepository.set('copilot_api_key', settings.copilot_api_key || '');
     if (settings.copilot_model !== undefined) await systemSettingsRepository.set('copilot_model', settings.copilot_model || '');
+    if (settings.copilot_auto_tier !== undefined) await systemSettingsRepository.set('copilot_auto_tier', settings.copilot_auto_tier || '');
+    if (settings.copilot_fusion_tier !== undefined) await systemSettingsRepository.set('copilot_fusion_tier', settings.copilot_fusion_tier || '');
     if (settings.openai_compatible_base_url !== undefined) await systemSettingsRepository.set('openai_compatible_base_url', settings.openai_compatible_base_url || '');
     if (settings.openai_compatible_api_key !== undefined) await systemSettingsRepository.set('openai_compatible_api_key', settings.openai_compatible_api_key || '');
     if (settings.openai_compatible_model !== undefined) await systemSettingsRepository.set('openai_compatible_model', settings.openai_compatible_model || '');

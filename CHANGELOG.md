@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the token's Copilot plan. Requests run through the bundled GitHub Copilot SDK in a
   restricted runtime process with every tool disabled, and each session is
   deleted once the reply is received (best-effort).
+- Copilot Auto routing preferences and Fusion Standard, High, and Max tiers can
+  be selected in Admin when available to the token owner's account.
 
 ### Fixed
 

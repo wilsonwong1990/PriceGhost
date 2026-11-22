@@ -8,6 +8,11 @@ import { useToast } from '../../../../context/ToastContext';
 import { apiErrorMessage } from '../../../../api/error';
 import ModelSelector from './ModelSelector';
 
+const COPILOT_BUILT_IN_MODELS: AIModel[] = [
+  { id: 'auto', name: 'Auto' },
+  { id: 'fusion', name: 'Copilot Fusion' },
+];
+
 interface AIProviderConfigProps {
   aiSettings: AISettings | null;
   setAiSettings: React.Dispatch<React.SetStateAction<AISettings | null>>;
@@ -122,7 +127,10 @@ export default function AIProviderConfig({
         showToast('Enter a GitHub token before verifying.', 'error');
         return;
       }
-      res = await AIService.testCopilot(aiSettings.copilot_api_key, aiSettings.copilot_model || undefined);
+      res = await AIService.testCopilot(aiSettings.copilot_api_key, aiSettings.copilot_model || undefined, {
+        copilot_auto_tier: aiSettings.copilot_auto_tier,
+        copilot_fusion_tier: aiSettings.copilot_fusion_tier,
+      });
     } else if (provider === 'openai_compatible') {
       if (!aiSettings?.openai_compatible_base_url || !aiSettings?.openai_compatible_model) {
         showToast('Enter the endpoint base URL and a model name before verifying.', 'error');
@@ -498,6 +506,7 @@ export default function AIProviderConfig({
             providerName="GitHub Copilot"
             value={aiSettings?.copilot_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, copilot_model: val } : null)}
+            builtInModels={COPILOT_BUILT_IN_MODELS}
             models={(modelsCache['copilot'] || []).map(model => ({
               ...model,
               name: model.description ? `${model.name || model.id} (${model.description})` : model.name,
@@ -507,6 +516,32 @@ export default function AIProviderConfig({
             canSync={Boolean(aiSettings?.copilot_api_key)}
             customPlaceholder="auto"
           />
+          {aiSettings?.copilot_model === 'auto' && (
+            <div className="form-group">
+              <label htmlFor="copilot-auto-tier">Auto routing preference</label>
+              <select id="copilot-auto-tier" className="form-control" value={aiSettings.copilot_auto_tier || ''} onChange={e => setAiSettings(s => s ? { ...s, copilot_auto_tier: e.target.value || null } : null)}>
+                <option value="">Copilot default</option>
+                <option value="efficiency">Efficiency</option>
+                <option value="balance">Balance</option>
+                <option value="intelligence">Intelligence</option>
+              </select>
+            </div>
+          )}
+          {aiSettings?.copilot_model === 'fusion' && (
+            <div className="form-group">
+              <label htmlFor="copilot-fusion-tier">Copilot Fusion tier</label>
+              <select id="copilot-fusion-tier" className="form-control" value={aiSettings.copilot_fusion_tier || 'standard'} onChange={e => setAiSettings(s => s ? { ...s, copilot_fusion_tier: e.target.value } : null)}>
+                <option value="standard">Standard</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
+            </div>
+          )}
+          {(aiSettings?.copilot_model === 'auto' || aiSettings?.copilot_model === 'fusion') && (
+            <small style={{ color: 'var(--text-muted)' }}>
+              Tier availability depends on the token owner's Copilot plan. Use Verify to test your selection.
+            </small>
+          )}
         </>
       )}
 

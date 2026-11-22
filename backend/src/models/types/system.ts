@@ -25,6 +25,8 @@ export interface AISettings {
   openrouter_model: string | null;
   copilot_api_key: string | null;
   copilot_model: string | null;
+  copilot_auto_tier?: string | null;
+  copilot_fusion_tier?: string | null;
   openai_compatible_base_url: string | null;
   openai_compatible_api_key: string | null;
   openai_compatible_model: string | null;

@@ -66,10 +66,16 @@ export async function testOpenAICompatibleConnection(params: {
 /**
  * Test Connection: GitHub Copilot
  */
-export async function testCopilotConnection(token: string, modelName?: string): Promise<string> {
+export async function testCopilotConnection(
+  token: string,
+  modelName?: string,
+  tiers?: { autoTier?: unknown; fusionTier?: unknown }
+): Promise<string> {
   const response = await runCopilotPrompt({
     token,
     model: modelName,
+    autoTier: tiers?.autoTier,
+    fusionTier: tiers?.fusionTier,
     prompt: 'Say "HELLO WORLD"',
     timeoutMs: 60000
   });

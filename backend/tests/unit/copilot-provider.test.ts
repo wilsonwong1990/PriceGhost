@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import { systemSettingsRepository } from '../../src/models';
+import { logger } from '../../src/utils/system/logger';
 import type { AISettings } from '../../src/models/types';
 
 /**
@@ -43,6 +44,7 @@ const sdk = vi.hoisted(() => {
     modelsGate: undefined as Promise<void> | undefined,
     stopGate: undefined as Promise<void> | undefined,
     disconnectGate: undefined as Promise<void> | undefined,
+    disconnectError: undefined as Error | undefined,
   };
   return state;
 });
@@ -87,6 +89,7 @@ vi.mock('@microsoft/copilot-sdk', () => {
         }),
         disconnect: vi.fn(async () => {
           sdk.sessionCalls.push('disconnect');
+          if (sdk.disconnectError) throw sdk.disconnectError;
           await sdk.disconnectGate;
         }),
       };
@@ -130,6 +133,7 @@ describe('GitHub Copilot provider', () => {
     sdk.modelsGate = undefined;
     sdk.stopGate = undefined;
     sdk.disconnectGate = undefined;
+    sdk.disconnectError = undefined;
     sdk.sendAndWait = async () => ({ data: { content: '{"price": 12.34}' } });
   });
 
@@ -158,6 +162,34 @@ describe('GitHub Copilot provider', () => {
   });
 
   describe('runCopilotPrompt', () => {
+    it.each([
+      ['auto', 'efficiency', null, { autoTier: 'efficiency' }],
+      ['auto', 'balance', 'max', { autoTier: 'balance' }],
+      ['auto', 'intelligence', null, { autoTier: 'intelligence' }],
+      ['auto', null, null, { autoTier: undefined }],
+      ['fusion', 'intelligence', 'standard', { fusionTier: 'standard' }],
+      ['fusion', null, 'high', { fusionTier: 'high' }],
+      ['fusion', null, 'max', { fusionTier: 'max' }],
+      ['fusion', null, null, { fusionTier: 'standard' }],
+      ['gpt-5', 'balance', 'max', undefined],
+    ])('passes the active routing tier for %s', async (model, autoTier, fusionTier, capi) => {
+      const { runCopilotPrompt } = await load();
+      await runCopilotPrompt({ token: TOKEN, model, autoTier, fusionTier, prompt: 'hi', timeoutMs: 5000 });
+      expect(sdk.createSessionOptions[0]).toMatchObject({
+        model, github: capi ? { token: TOKEN, capi } : { token: TOKEN },
+      });
+      if (!capi) expect(sdk.createSessionOptions[0]).not.toHaveProperty('github.capi');
+    });
+
+    it('rejects invalid active tiers before starting the runtime', async () => {
+      const { runCopilotPrompt } = await load();
+      await expect(runCopilotPrompt({ token: TOKEN, model: 'auto', autoTier: 'not-a-tier', prompt: 'hi', timeoutMs: 5000 }))
+        .rejects.toMatchObject({ statusCode: 400, message: 'Invalid Copilot Auto tier' });
+      await expect(runCopilotPrompt({ token: TOKEN, model: 'fusion', fusionTier: { invalid: true }, prompt: 'hi', timeoutMs: 5000 }))
+        .rejects.toMatchObject({ statusCode: 400, message: 'Invalid Copilot Fusion tier' });
+      expect(sdk.clients).toHaveLength(0);
+    });
+
     it('returns the reply text and the summed token usage', async () => {
       const { runCopilotPrompt } = await load();
       const response = await runCopilotPrompt({ token: TOKEN, prompt: 'price?', timeoutMs: 5000 });
@@ -234,6 +266,14 @@ describe('GitHub Copilot provider', () => {
       expect(sdk.sessionCalls).not.toContain('delete:session-1');
       await vi.advanceTimersByTimeAsync(5001);
       expect(sdk.sessionCalls).toContain('delete:session-1');
+    });
+
+    it('does not log secrets from SDK cleanup errors', async () => {
+      sdk.disconnectError = new Error(`SDK failed with ${TOKEN}`);
+      const { runCopilotPrompt } = await load();
+      await runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 });
+      await vi.waitFor(() => expect(logger.debug).toHaveBeenCalledWith('AI | copilot | Could not disconnect the session', 'AI'));
+      expect(JSON.stringify(vi.mocked(logger.debug).mock.calls)).not.toContain(TOKEN);
     });
 
     it('aborts and still deletes the session when the request fails', async () => {
@@ -508,6 +548,62 @@ describe('GitHub Copilot provider', () => {
       expect(response.text).toBe('{"price": 12.34}');
       expect(sdk.createSessionOptions).toHaveLength(1);
       expect(sdk.sessionCalls[0]).toBe('send:what is the price?');
+    });
+
+    it('uses the saved tier from cached settings for normal generation', async () => {
+      vi.resetModules();
+      repo.getAll.mockResolvedValue({
+        ai_provider: 'copilot', copilot_api_key: TOKEN, copilot_model: 'fusion',
+        copilot_auto_tier: 'balance', copilot_fusion_tier: 'high',
+      });
+      const { settingsCache } = await import('../../src/utils/system/cache/SettingsCache');
+      const { getAIProvider } = await import('../../src/services/ai/client');
+      const settings = await settingsCache.getAISettings();
+      await getAIProvider(settings).generate('price?');
+      expect(sdk.createSessionOptions[0]).toMatchObject({
+        model: 'fusion', github: { capi: { fusionTier: 'high' } },
+      });
+    });
+
+    it('persists and reads both tier settings through the repository', async () => {
+      const { systemSettingsRepository: repository } = await import('../../src/services/domain/system/repositories/system-settings.repository');
+      const getAll = vi.spyOn(repository, 'getAll').mockResolvedValue({
+        copilot_auto_tier: 'efficiency', copilot_fusion_tier: 'max',
+      });
+      const set = vi.spyOn(repository, 'set').mockResolvedValue();
+      try {
+        const settings = await repository.updateAISettings({ copilot_auto_tier: 'efficiency', copilot_fusion_tier: 'max' });
+        expect(set).toHaveBeenCalledWith('copilot_auto_tier', 'efficiency');
+        expect(set).toHaveBeenCalledWith('copilot_fusion_tier', 'max');
+        expect(settings).toMatchObject({ copilot_auto_tier: 'efficiency', copilot_fusion_tier: 'max' });
+      } finally {
+        getAll.mockRestore();
+        set.mockRestore();
+      }
+    });
+
+    it('uses the selected tier in a provider verification request', async () => {
+      const { testCopilotConnection } = await import('../../src/services/ai/connection-test');
+      await testCopilotConnection(TOKEN, 'fusion', { fusionTier: 'max' });
+      expect(sdk.createSessionOptions[0]).toMatchObject({
+        model: 'fusion', github: { capi: { fusionTier: 'max' } },
+      });
+    });
+
+    it('rejects invalid tier settings and accepts retained inactive tiers', async () => {
+      const { AISettingsService } = await import('../../src/services/domain/system/settings/ai');
+      const service = new AISettingsService();
+      repo.getAISettings.mockResolvedValue(storedSettings({}));
+      repo.updateAISettings.mockResolvedValue(storedSettings({}));
+      await expect(service.updateAISettings({ copilot_auto_tier: 'unknown' }, 7))
+        .rejects.toMatchObject({ statusCode: 400 });
+      await expect(service.updateAISettings({ copilot_fusion_tier: 3 }, 7))
+        .rejects.toMatchObject({ statusCode: 400 });
+      expect(repo.updateAISettings).not.toHaveBeenCalled();
+      await service.updateAISettings({ copilot_model: 'gpt-5', copilot_auto_tier: 'balance', copilot_fusion_tier: 'max' }, 7);
+      expect(repo.updateAISettings).toHaveBeenCalledWith({
+        copilot_model: 'gpt-5', copilot_auto_tier: 'balance', copilot_fusion_tier: 'max',
+      });
     });
 
     it.each(['true', 'false'])('keeps the stored token write-only with REDACT_API_KEYS=%s', async (redact) => {

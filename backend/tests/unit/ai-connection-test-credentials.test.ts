@@ -140,7 +140,18 @@ describe('AI connection test credential resolution', () => {
 
     testCopilotConnection.mockRejectedValueOnce(new Error('internal SDK details'));
     expect(await postCopilotTest({ api_key: 'github_pat_test' })).toEqual({
-      status: 500, body: { error: 'Connection failed' },
+      status: 500, body: { error: 'Connection failed. Check whether the selected Copilot model and tier are available to this account.' },
+    });
+  });
+
+  it('passes unsaved Copilot tier choices to verification', async () => {
+    testCopilotConnection.mockResolvedValue('pong');
+    const result = await postCopilotTest({
+      api_key: 'github_pat_test', model: 'fusion', copilot_auto_tier: 'balance', copilot_fusion_tier: 'max',
+    });
+    expect(result.status).toBe(200);
+    expect(testCopilotConnection).toHaveBeenCalledWith('github_pat_test', 'fusion', {
+      autoTier: 'balance', fusionTier: 'max',
     });
   });
 

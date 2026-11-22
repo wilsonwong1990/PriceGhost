@@ -3,6 +3,7 @@ import { AISettings, DiscoveredModel } from '../../../../models/types';
 import { logger } from '../../../../utils/system/logger';
 import { settingsCache } from '../../../../utils/cache';
 import { assertValidCopilotTokenInput, isMaskedSecret, maskSecret, MASK_WHOLESALE } from '../../../../utils/system/masking';
+import { parseCopilotAutoTier, parseCopilotFusionTier } from '../../../../utils/system/copilot-tiers';
 
 /**
  * The slice of an OpenAI-style `GET /models` body that model discovery reads.
@@ -101,6 +102,9 @@ export class AISettingsService {
   async updateAISettings(updates: any, userId: number) {
     const redactEnabled = process.env.REDACT_API_KEYS === 'true';
     const oldSettings = await systemSettingsRepository.getAISettings();
+
+    parseCopilotAutoTier(updates.copilot_auto_tier);
+    parseCopilotFusionTier(updates.copilot_fusion_tier);
 
     if (redactEnabled) {
       // The UI echoes back whatever `getAISettings` gave it, masked keys

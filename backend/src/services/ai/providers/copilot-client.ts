@@ -4,6 +4,7 @@ import path from 'path';
 import type { CopilotClient } from '@microsoft/copilot-sdk';
 import { DiscoveredModel } from '../../../models/types';
 import { logger } from '../../../utils/system/logger';
+import { parseCopilotAutoTier, parseCopilotFusionTier } from '../../../utils/system/copilot-tiers';
 import { telemetryService } from '../../domain/system/telemetry.service';
 import { AIResponse } from './types';
 
@@ -93,6 +94,8 @@ class CopilotRuntimeError extends Error {
 export interface CopilotPromptRequest {
   token: string | null | undefined;
   model?: string | null;
+  autoTier?: unknown;
+  fusionTier?: unknown;
   prompt: string;
   timeoutMs: number;
   jsonMode?: boolean;
@@ -133,8 +136,8 @@ function buildRuntimeEnv(): Record<string, string | undefined> {
 function removeStateDir(stateDir: string): void {
   try {
     fs.rmSync(stateDir, { recursive: true, force: true });
-  } catch (error) {
-    logger.debug(`AI | copilot | Could not remove state directory: ${(error as Error).message}`, 'AI');
+  } catch {
+    logger.debug('AI | copilot | Could not remove state directory', 'AI');
   }
 }
 
@@ -165,12 +168,12 @@ function stopEntry(entry: ClientEntry): void {
     try {
       const errors = await withTimeout(() => client.stop(), CLEANUP_TIMEOUT_MS);
       if (errors.length > 0) throw new Error('Runtime shutdown reported errors');
-    } catch (error) {
-      logger.debug(`AI | copilot | Could not stop runtime: ${(error as Error).message}`, 'AI');
+    } catch {
+      logger.debug('AI | copilot | Could not stop runtime', 'AI');
       try {
         await withTimeout(() => client.forceStop(), CLEANUP_TIMEOUT_MS);
-      } catch (forceError) {
-        logger.error(`AI | copilot | Could not force-stop runtime: ${(forceError as Error).message}`, 'AI');
+      } catch {
+        logger.error('AI | copilot | Could not force-stop runtime', 'AI');
       }
     } finally {
       removeStateDir(entry.stateDir);
@@ -206,8 +209,8 @@ async function withTimeout<T>(action: () => Promise<T>, timeoutMs: number, onTim
 async function bestEffort(label: string, action: () => Promise<unknown>): Promise<void> {
   try {
     await withTimeout(action, CLEANUP_TIMEOUT_MS);
-  } catch (error) {
-    logger.debug(`AI | copilot | Could not ${label}: ${(error as Error).message}`, 'AI');
+  } catch {
+    logger.debug(`AI | copilot | Could not ${label}`, 'AI');
   }
 }
 
@@ -309,6 +312,12 @@ function toCopilotError(error: unknown): Error {
  */
 export async function runCopilotPrompt(request: CopilotPromptRequest): Promise<AIResponse> {
   const token = validateCopilotToken(request.token);
+  const model = request.model || DEFAULT_COPILOT_MODEL;
+  const capi = model === 'auto'
+    ? { autoTier: parseCopilotAutoTier(request.autoTier) }
+    : model === 'fusion'
+      ? { fusionTier: parseCopilotFusionTier(request.fusionTier) ?? 'standard' }
+      : undefined;
 
   try {
     return await withClient(token, request.timeoutMs, async (client, entry, signal) => {
@@ -347,9 +356,9 @@ export async function runCopilotPrompt(request: CopilotPromptRequest): Promise<A
       signal.addEventListener('abort', cancel, { once: true });
       try {
         session = await client.createSession({
-          model: request.model || DEFAULT_COPILOT_MODEL,
+          model,
           workingDirectory: entry.stateDir,
-          github: { token },
+          github: { token, ...(capi ? { capi } : {}) },
           tools: { availableTools: [] },
           state: {
             infiniteSessions: { enabled: false },

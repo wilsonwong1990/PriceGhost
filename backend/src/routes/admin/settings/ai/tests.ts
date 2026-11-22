@@ -14,7 +14,7 @@ const router = Router();
  */
 function handleAiTest(
   provider: string, 
-  testFn: (ai: any, apiKey: string, model?: string) => Promise<any>
+  testFn: (ai: any, apiKey: string, model?: string, body?: { copilot_auto_tier?: unknown; copilot_fusion_tier?: unknown }) => Promise<any>
 ) {
   return asyncHandler(async (req: AuthRequest, res: Response) => {
     let { api_key, model: selectedModel } = req.body;
@@ -36,14 +36,16 @@ function handleAiTest(
     }
 
     const aiModule = await import('../../../../services/ai');
-    const result = await testFn(aiModule, api_key, selectedModel);
+    const result = await testFn(aiModule, api_key, selectedModel, req.body);
 
     const message = result 
       ? `Successfully connected to ${provider} API. Response: ${result}`
       : `Successfully connected to ${provider} API`;
 
     res.json({ success: true, message });
-  }, `Admin | ${provider} Test`, 'Admin', `Connection failed`);
+  }, `Admin | ${provider} Test`, 'Admin', provider === 'Copilot'
+    ? 'Connection failed. Check whether the selected Copilot model and tier are available to this account.'
+    : 'Connection failed');
 }
 
 // Global Extraction Test
@@ -101,7 +103,10 @@ router.post('/test-openai', handleAiTest('OpenAI', (ai, k, m) =>
 router.post('/test-openrouter', handleAiTest('OpenRouter', (ai, k, m) =>
   ai.testOpenAICompatibleConnection({ apiKey: k, baseUrl: 'https://openrouter.ai/api/v1', model: m || 'meta-llama/llama-3.1-8b-instruct:free' })));
 
-router.post('/test-copilot', handleAiTest('Copilot', (ai, k, m) => ai.testCopilotConnection(k, m)));
+router.post('/test-copilot', handleAiTest('Copilot', (ai, k, m, body) => ai.testCopilotConnection(k, m, {
+  autoTier: body?.copilot_auto_tier,
+  fusionTier: body?.copilot_fusion_tier,
+})));
 
 // OpenAI-compatible local servers (vLLM, LM Studio, LocalAI, ...): base_url
 // is required, the API key is optional.

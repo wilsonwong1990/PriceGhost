@@ -25,6 +25,8 @@ export class CopilotProvider implements AIProvider {
     const response = await withRetry(() => runCopilotPrompt({
       token: this.token,
       model: this.model,
+      autoTier: this.settings.copilot_auto_tier,
+      fusionTier: this.settings.copilot_fusion_tier,
       prompt,
       jsonMode: options?.jsonMode,
       timeoutMs: this.settings.ai_timeout || 30000
