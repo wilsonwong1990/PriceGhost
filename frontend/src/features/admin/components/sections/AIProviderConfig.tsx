@@ -60,6 +60,7 @@ export default function AIProviderConfig({
       else if (provider === 'groq') apiKey = aiSettings?.groq_api_key || undefined;
       else if (provider === 'mistral') apiKey = aiSettings?.mistral_api_key || undefined;
       else if (provider === 'openrouter') apiKey = aiSettings?.openrouter_api_key || undefined;
+      else if (provider === 'copilot') apiKey = aiSettings?.copilot_api_key || undefined;
       else if (provider === 'ollama') baseUrl = aiSettings?.ollama_base_url || undefined;
       else if (provider === 'openai_compatible') {
         baseUrl = aiSettings?.openai_compatible_base_url || undefined;
@@ -116,6 +117,12 @@ export default function AIProviderConfig({
         return;
       }
       res = await AIService.testOpenRouter(aiSettings.openrouter_api_key, aiSettings.openrouter_model || undefined);
+    } else if (provider === 'copilot') {
+      if (!aiSettings?.copilot_api_key) {
+        showToast('Enter a GitHub token before verifying.', 'error');
+        return;
+      }
+      res = await AIService.testCopilot(aiSettings.copilot_api_key, aiSettings.copilot_model || undefined);
     } else if (provider === 'openai_compatible') {
       if (!aiSettings?.openai_compatible_base_url || !aiSettings?.openai_compatible_model) {
         showToast('Enter the endpoint base URL and a model name before verifying.', 'error');
@@ -170,6 +177,7 @@ export default function AIProviderConfig({
             <option value="groq">Groq (Llama 3)</option>
             <option value="mistral">Mistral AI</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="copilot">GitHub Copilot</option>
             <option value="openai_compatible">OpenAI-Compatible (vLLM, LM Studio, ...)</option>
             <option value="ollama">Local Ollama</option>
         </select>
@@ -445,6 +453,42 @@ export default function AIProviderConfig({
             isSyncing={!!isSyncingMap['openrouter']}
             canSync={true}
             customPlaceholder="e.g. meta-llama/llama-3.1-8b-instruct:free"
+          />
+        </>
+      )}
+
+      {aiSettings?.ai_provider === 'copilot' && (
+        <>
+          <form onSubmit={(e) => e.preventDefault()} className="form-group">
+            <label htmlFor="copilot-api-key">GitHub Token</label>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <div style={{ flex: 1 }}>
+                <PasswordInput secret
+                  id="copilot-api-key"
+                  name="copilot-api-key"
+                  value={aiSettings?.copilot_api_key || ''}
+                  onChange={e => setAiSettings(s => s ? { ...s, copilot_api_key: e.target.value } : null)}
+                  placeholder="github_pat_..."
+                  autoComplete="new-password"
+                  allowReveal={!aiSettings?.redact_api_keys}
+                />
+              </div>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => handleTestProvider('copilot')}>Verify</button>
+            </div>
+            <small style={{ color: 'var(--text-muted)' }}>
+              Fine-grained personal access token with the "Copilot Requests" permission. Usage counts against the token owner's Copilot premium requests.
+            </small>
+          </form>
+
+          <ModelSelector
+            providerName="GitHub Copilot"
+            value={aiSettings?.copilot_model || ''}
+            onChange={val => setAiSettings(s => s ? { ...s, copilot_model: val } : null)}
+            models={modelsCache['copilot'] || []}
+            onSync={() => handleSyncModels('copilot')}
+            isSyncing={!!isSyncingMap['copilot']}
+            canSync={Boolean(aiSettings?.copilot_api_key)}
+            customPlaceholder="auto"
           />
         </>
       )}

@@ -142,6 +142,22 @@ Unified gateway accessing hundreds of models across multiple AI vendors with a s
 
 ---
 
+### GitHub Copilot
+
+Use an existing GitHub Copilot subscription instead of a separate provider account. PriceStalker drives the bundled GitHub Copilot SDK runtime, so no extra CLI needs to be installed.
+
+* **Account requirement**: A GitHub account with an active Copilot subscription.
+* **Token**: Create a **fine-grained personal access token** at [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) and grant it the **Copilot Requests** account permission. Classic tokens (`ghp_...`) are not supported, per [GitHub's Copilot CLI authentication documentation](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli).
+* **Configuration Fields**:
+  * **GitHub Token**: The token above, starting with `github_pat_...`. It is stored and masked like every other provider key.
+  * **GitHub Copilot Model**: Defaults to `auto`, which lets Copilot choose. Use **Sync** to list the models your plan can use, then pick a low-multiplier model for routine extraction.
+* **How it runs**: Each request uses a short-lived session with all tools disabled, and the session is deleted as soon as the reply arrives, so scraped page content is not meant to be kept on disk (cleanup is best-effort and stops working if the process is killed). The runtime is started on first use and stopped after five minutes of inactivity.
+* **Container notes**: The runtime is a platform binary installed with the backend (about 200 MB) and needs a writable temporary directory. It is started with only `PATH`, proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`), CA settings (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_EXTRA_CA_CERTS`) and `COPILOT_TELEMETRY_DISABLED` from the backend environment, so PriceStalker's own secrets are not passed to it. Setting `DISABLE_TELEMETRY`, `DO_NOT_TRACK` or `TELEMETRY_ENABLED=false` in the backend environment also disables the runtime's own telemetry; turning telemetry off in Admin -> System Settings alone does not.
+* **Cost Note**: Requests count against the token owner's Copilot premium request allowance; the model list shows each model's multiplier. A request that times out is retried by the existing retry logic, so a slow model can use more than one request.
+* **Status**: The SDK version is pinned exactly in `backend/package.json`; review its release notes before upgrading.
+
+---
+
 ### Local Ollama (Self-Hosted)
 
 Run 100% private, local models on your own server hardware without sending data to external APIs.

@@ -47,6 +47,8 @@ export const systemSettingsRepository = {
       mistral_model: all.mistral_model || null,
       openrouter_api_key: all.openrouter_api_key || null,
       openrouter_model: all.openrouter_model || null,
+      copilot_api_key: all.copilot_api_key || null,
+      copilot_model: all.copilot_model || null,
       openai_compatible_base_url: all.openai_compatible_base_url || null,
       openai_compatible_api_key: all.openai_compatible_api_key || null,
       openai_compatible_model: all.openai_compatible_model || null,
@@ -84,6 +86,8 @@ export const systemSettingsRepository = {
     if (settings.mistral_model !== undefined) await systemSettingsRepository.set('mistral_model', settings.mistral_model || '');
     if (settings.openrouter_api_key !== undefined) await systemSettingsRepository.set('openrouter_api_key', settings.openrouter_api_key || '');
     if (settings.openrouter_model !== undefined) await systemSettingsRepository.set('openrouter_model', settings.openrouter_model || '');
+    if (settings.copilot_api_key !== undefined) await systemSettingsRepository.set('copilot_api_key', settings.copilot_api_key || '');
+    if (settings.copilot_model !== undefined) await systemSettingsRepository.set('copilot_model', settings.copilot_model || '');
     if (settings.openai_compatible_base_url !== undefined) await systemSettingsRepository.set('openai_compatible_base_url', settings.openai_compatible_base_url || '');
     if (settings.openai_compatible_api_key !== undefined) await systemSettingsRepository.set('openai_compatible_api_key', settings.openai_compatible_api_key || '');
     if (settings.openai_compatible_model !== undefined) await systemSettingsRepository.set('openai_compatible_model', settings.openai_compatible_model || '');

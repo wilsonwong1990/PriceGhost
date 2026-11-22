@@ -188,6 +188,8 @@ export class SystemSettingsCache {
       mistral_model: all.mistral_model || null,
       openrouter_api_key: all.openrouter_api_key || null,
       openrouter_model: all.openrouter_model || null,
+      copilot_api_key: all.copilot_api_key || null,
+      copilot_model: all.copilot_model || null,
       openai_compatible_base_url: all.openai_compatible_base_url || null,
       openai_compatible_api_key: all.openai_compatible_api_key || null,
       openai_compatible_model: all.openai_compatible_model || null,

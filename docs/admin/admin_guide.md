@@ -77,7 +77,7 @@ Configure instance-wide authentication and login security:
 * *For architecture details and parameters, see [authentication.md](authentication.md).*
 
 ### 7. AI Engine
-Configure the active AI provider (Gemini, OpenAI, Anthropic, Ollama, Vertex, Groq, DeepSeek, Mistral, OpenRouter), input credentials, test provider connections, and toggle switches for **AI Fallback**, **AI Verification**, and **Auto-Mapping**.
+Configure the active AI provider (Gemini, OpenAI, Anthropic, Ollama, Vertex, Groq, DeepSeek, Mistral, OpenRouter, GitHub Copilot), input credentials, test provider connections, and toggle switches for **AI Fallback**, **AI Verification**, and **Auto-Mapping**.
 * *For supported models and configuration guidelines, see [ai_features.md](ai_features.md).*
 
 ### 8. Logs

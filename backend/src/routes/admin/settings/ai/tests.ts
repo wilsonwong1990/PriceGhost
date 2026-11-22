@@ -100,6 +100,8 @@ router.post('/test-openai', handleAiTest('OpenAI', (ai, k, m) =>
 router.post('/test-openrouter', handleAiTest('OpenRouter', (ai, k, m) =>
   ai.testOpenAICompatibleConnection({ apiKey: k, baseUrl: 'https://openrouter.ai/api/v1', model: m || 'meta-llama/llama-3.1-8b-instruct:free' })));
 
+router.post('/test-copilot', handleAiTest('Copilot', (ai, k, m) => ai.testCopilotConnection(k, m)));
+
 // OpenAI-compatible local servers (vLLM, LM Studio, LocalAI, ...): base_url
 // is required, the API key is optional.
 router.post('/test-openai-compatible', asyncHandler(async (req: AuthRequest, res: Response) => {

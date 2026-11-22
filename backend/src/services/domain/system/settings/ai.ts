@@ -87,6 +87,7 @@ export class AISettingsService {
       settings.groq_api_key = maskSecret(settings.groq_api_key);
       settings.mistral_api_key = maskSecret(settings.mistral_api_key);
       settings.openrouter_api_key = maskSecret(settings.openrouter_api_key);
+      settings.copilot_api_key = maskSecret(settings.copilot_api_key);
       settings.openai_compatible_api_key = maskSecret(settings.openai_compatible_api_key);
     }
 
@@ -112,6 +113,7 @@ export class AISettingsService {
       if (isMaskedSecret(updates.groq_api_key)) delete updates.groq_api_key;
       if (isMaskedSecret(updates.mistral_api_key)) delete updates.mistral_api_key;
       if (isMaskedSecret(updates.openrouter_api_key)) delete updates.openrouter_api_key;
+      if (isMaskedSecret(updates.copilot_api_key)) delete updates.copilot_api_key;
       if (isMaskedSecret(updates.openai_compatible_api_key)) delete updates.openai_compatible_api_key;
     }
 
@@ -308,6 +310,12 @@ export class AISettingsService {
             description: m.description ? `${m.description.slice(0, 100)}...` : undefined,
           }))
           .sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      }
+
+      case 'copilot': {
+        const { listCopilotModels } = await import('../../../ai/providers/copilot-client');
+        models = await listCopilotModels(apiKey);
         break;
       }
 

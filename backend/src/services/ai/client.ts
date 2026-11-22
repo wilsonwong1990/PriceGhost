@@ -5,6 +5,7 @@ import { OpenAIProvider } from './providers/openai';
 import { GeminiProvider } from './providers/gemini';
 import { OllamaProvider } from './providers/ollama';
 import { VertexProvider } from './providers/vertex';
+import { CopilotProvider } from './providers/copilot';
 
 export * from './providers/types';
 
@@ -32,6 +33,8 @@ export function getAIProvider(settings: AISettings): AIProvider {
       return new GeminiProvider(settings);
     case 'vertex':
       return new VertexProvider(settings);
+    case 'copilot':
+      return new CopilotProvider(settings);
     default:
       throw new Error(`Unsupported AI provider: ${provider}`);
   }
