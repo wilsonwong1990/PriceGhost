@@ -9,7 +9,8 @@ import {
 
 export class SystemSettingsService {
   async getSettings(): Promise<Record<string, string>> {
-    return await systemSettingsRepository.getAll();
+    const settings = await systemSettingsRepository.getAll();
+    return Object.fromEntries(Object.entries(settings).filter(([key]) => !key.endsWith('_api_key')));
   }
 
   async getSetting(key: string): Promise<string | null> {
@@ -65,7 +66,7 @@ export class SystemSettingsService {
       settingsCache.clear();
     }
 
-    return await systemSettingsRepository.getAll();
+    return this.getSettings();
   }
 
   /**

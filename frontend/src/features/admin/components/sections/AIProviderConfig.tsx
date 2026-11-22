@@ -168,7 +168,14 @@ export default function AIProviderConfig({
 
       <div className="form-group">
         <label>Primary AI Provider</label>
-        <select className="form-control" value={aiSettings?.ai_provider || 'gemini'} onChange={(e) => setAiSettings(s => s ? { ...s, ai_provider: e.target.value as any } : null)}>
+        <select className="form-control" value={aiSettings?.ai_provider || 'gemini'} onChange={(e) => {
+          const provider = e.target.value as AISettings['ai_provider'];
+          setAiSettings(s => s ? {
+            ...s,
+            ai_provider: provider,
+            copilot_model: provider === 'copilot' && !s.copilot_model ? 'auto' : s.copilot_model,
+          } : null);
+        }}>
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="openai">OpenAI (GPT)</option>
             <option value="gemini">Google Gemini</option>
@@ -467,7 +474,14 @@ export default function AIProviderConfig({
                   id="copilot-api-key"
                   name="copilot-api-key"
                   value={aiSettings?.copilot_api_key || ''}
-                  onChange={e => setAiSettings(s => s ? { ...s, copilot_api_key: e.target.value } : null)}
+                  onFocus={e => { if (e.currentTarget.value === '********') e.currentTarget.select(); }}
+                  onChange={e => {
+                    const value = e.target.value;
+                    setAiSettings(s => s ? {
+                      ...s,
+                      copilot_api_key: s.copilot_api_key === '********' ? value.replace(/\*/g, '') : value,
+                    } : null);
+                  }}
                   placeholder="github_pat_..."
                   autoComplete="new-password"
                   allowReveal={!aiSettings?.redact_api_keys}
@@ -484,7 +498,10 @@ export default function AIProviderConfig({
             providerName="GitHub Copilot"
             value={aiSettings?.copilot_model || ''}
             onChange={val => setAiSettings(s => s ? { ...s, copilot_model: val } : null)}
-            models={modelsCache['copilot'] || []}
+            models={(modelsCache['copilot'] || []).map(model => ({
+              ...model,
+              name: model.description ? `${model.name || model.id} (${model.description})` : model.name,
+            }))}
             onSync={() => handleSyncModels('copilot')}
             isSyncing={!!isSyncingMap['copilot']}
             canSync={Boolean(aiSettings?.copilot_api_key)}

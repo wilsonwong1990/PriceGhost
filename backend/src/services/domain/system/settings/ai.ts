@@ -2,7 +2,7 @@ import { systemSettingsRepository } from '../../../../models';
 import { AISettings, DiscoveredModel } from '../../../../models/types';
 import { logger } from '../../../../utils/system/logger';
 import { settingsCache } from '../../../../utils/cache';
-import { isMaskedSecret, maskSecret } from '../../../../utils/system/masking';
+import { assertValidCopilotTokenInput, isMaskedSecret, maskSecret, MASK_WHOLESALE } from '../../../../utils/system/masking';
 
 /**
  * The slice of an OpenAI-style `GET /models` body that model discovery reads.
@@ -87,9 +87,10 @@ export class AISettingsService {
       settings.groq_api_key = maskSecret(settings.groq_api_key);
       settings.mistral_api_key = maskSecret(settings.mistral_api_key);
       settings.openrouter_api_key = maskSecret(settings.openrouter_api_key);
-      settings.copilot_api_key = maskSecret(settings.copilot_api_key);
       settings.openai_compatible_api_key = maskSecret(settings.openai_compatible_api_key);
     }
+
+    settings.copilot_api_key = settings.copilot_api_key ? MASK_WHOLESALE : null;
 
     return {
       ...settings,
@@ -113,9 +114,10 @@ export class AISettingsService {
       if (isMaskedSecret(updates.groq_api_key)) delete updates.groq_api_key;
       if (isMaskedSecret(updates.mistral_api_key)) delete updates.mistral_api_key;
       if (isMaskedSecret(updates.openrouter_api_key)) delete updates.openrouter_api_key;
-      if (isMaskedSecret(updates.copilot_api_key)) delete updates.copilot_api_key;
       if (isMaskedSecret(updates.openai_compatible_api_key)) delete updates.openai_compatible_api_key;
     }
+    assertValidCopilotTokenInput(updates.copilot_api_key);
+    if (updates.copilot_api_key === MASK_WHOLESALE) delete updates.copilot_api_key;
 
     const settings = await systemSettingsRepository.updateAISettings(updates);
 
@@ -170,6 +172,7 @@ export class AISettingsService {
     const storedSettings = await systemSettingsRepository.getAISettings();
 
     let apiKey = credentials?.apiKey;
+    if (provider === 'copilot') assertValidCopilotTokenInput(apiKey);
     let baseUrl = credentials?.baseUrl;
     const storedBaseUrl = readSettingsField(storedSettings, `${provider}_base_url`);
 

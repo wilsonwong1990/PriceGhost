@@ -5,7 +5,7 @@ import { asyncHandler } from '../../../../utils/system/route-helpers';
 
 import { systemSettingsRepository } from '../../../../models';
 import { AISettings } from '../../../../models/types';
-import { isMaskedSecret } from '../../../../utils/system/masking';
+import { assertValidCopilotTokenInput, isMaskedSecret } from '../../../../utils/system/masking';
 
 const router = Router();
 
@@ -18,6 +18,7 @@ function handleAiTest(
 ) {
   return asyncHandler(async (req: AuthRequest, res: Response) => {
     let { api_key, model: selectedModel } = req.body;
+    if (provider === 'Copilot') assertValidCopilotTokenInput(api_key);
 
     // A masked key is the placeholder `getAISettings` handed the admin UI when
     // REDACT_API_KEYS=true, not a credential: resolve the stored one behind it

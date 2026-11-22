@@ -24,8 +24,11 @@ export default function AISection() {
 
   const fetchAIData = () => runFetchAIData(async () => {
     const settingsRes = await AIService.getAI();
-    setAiSettings(settingsRes);
-    setSavedSettings(settingsRes);
+    const settings = settingsRes?.ai_provider === 'copilot' && !settingsRes.copilot_model
+      ? { ...settingsRes, copilot_model: 'auto' }
+      : settingsRes;
+    setAiSettings(settings);
+    setSavedSettings(settings);
   }, { onErrorFallback: 'Failed to load AI settings' });
 
   useEffect(() => {

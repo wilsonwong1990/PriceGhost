@@ -12,9 +12,9 @@ import { AIResponse } from './types';
  * connection test and model discovery.
  *
  * The SDK drives a bundled Copilot runtime. It is started as a child process
- * rather than inside the Node heap, with a minimal environment, so a runtime
- * fault cannot take the API down and the application's own secrets (database
- * URL, JWT secret, other provider keys) are never visible to it. Every request
+ * rather than inside the Node heap, with a minimal environment that excludes
+ * application secrets such as the database URL, JWT secret and other provider
+ * keys. Every request
  * runs in a throwaway session with all tools disabled and every permission
  * request rejected, because the prompts embed scraped page content that must be
  * treated as untrusted input.
@@ -41,6 +41,7 @@ const TRANSPORT_FAILURE_PATTERN =
 
 /** Best-effort cleanup calls give up after this long so a hung runtime cannot stall a request. */
 const CLEANUP_TIMEOUT_MS = 5000;
+const MODEL_DISCOVERY_TIMEOUT_MS = 10000;
 
 /** Variables the runtime may inherit: proxy and CA settings plus the telemetry opt-out. */
 const RUNTIME_ENV_ALLOWLIST = [
@@ -61,6 +62,7 @@ interface ClientEntry {
   token: string;
   stateDir: string;
   client: Promise<CopilotClient>;
+  instance?: CopilotClient;
   inFlight: number;
   retired: boolean;
   stopping: boolean;
@@ -69,6 +71,24 @@ interface ClientEntry {
 
 let currentEntry: ClientEntry | null = null;
 let exitHookRegistered = false;
+
+class CopilotValidationError extends Error {
+  readonly statusCode = 400;
+}
+
+class CopilotRuntimeError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+
+  constructor(error: unknown, message: string) {
+    super(/timeout|timed out/i.test(message) ? 'GitHub Copilot request timeout' : 'GitHub Copilot request failed', { cause: error });
+    if (typeof error === 'object' && error !== null) {
+      if ('status' in error && typeof error.status === 'number') this.status = error.status;
+      else if ('statusCode' in error && typeof error.statusCode === 'number') this.status = error.statusCode;
+      if ('code' in error && typeof error.code === 'string') this.code = error.code;
+    }
+  }
+}
 
 export interface CopilotPromptRequest {
   token: string | null | undefined;
@@ -86,10 +106,10 @@ export interface CopilotPromptRequest {
 export function validateCopilotToken(token: string | null | undefined): string {
   const trimmed = token?.trim();
   if (!trimmed) {
-    throw new Error('GitHub token is required for the GitHub Copilot provider');
+    throw new CopilotValidationError('GitHub token is required for the GitHub Copilot provider');
   }
   if (trimmed.startsWith('ghp_')) {
-    throw new Error(
+    throw new CopilotValidationError(
       'Classic personal access tokens (ghp_) are not supported by GitHub Copilot. ' +
       'Use a fine-grained personal access token with the "Copilot Requests" permission.'
     );
@@ -104,7 +124,7 @@ function buildRuntimeEnv(): Record<string, string | undefined> {
   }
   // An environment-level telemetry opt-out for this application also opts the runtime out. The Admin
   // toggle is not consulted here because the runtime's environment is fixed when it starts.
-  if (env.COPILOT_TELEMETRY_DISABLED === undefined && telemetryService.isEnvDisabled()) {
+  if (telemetryService.isEnvDisabled()) {
     env.COPILOT_TELEMETRY_DISABLED = 'true';
   }
   return env;
@@ -118,14 +138,16 @@ function removeStateDir(stateDir: string): void {
   }
 }
 
-async function startClient(token: string, stateDir: string): Promise<CopilotClient> {
+async function startClient(entry: ClientEntry): Promise<CopilotClient> {
   const { CopilotClient: Client, RuntimeConnection } = await import('@microsoft/copilot-sdk');
+  if (entry.stopping) throw new Error('Copilot runtime was retired before startup');
   const client = new Client({
     mode: 'empty',
-    runtime: RuntimeConnection.forSpawnedStdio({ baseDirectory: stateDir, workingDirectory: stateDir, env: buildRuntimeEnv() }),
-    github: { token, useLoggedInUser: false },
+    runtime: RuntimeConnection.forSpawnedStdio({ baseDirectory: entry.stateDir, workingDirectory: entry.stateDir, env: buildRuntimeEnv() }),
+    github: { token: entry.token, useLoggedInUser: false },
     observability: { logLevel: 'error' },
   });
+  entry.instance = client;
   await client.start();
   return client;
 }
@@ -134,10 +156,26 @@ function stopEntry(entry: ClientEntry): void {
   if (entry.stopping) return;
   entry.stopping = true;
   clearTimeout(entry.idleTimer);
-  entry.client
-    .then((client) => client.stop())
-    .catch(() => undefined)
-    .finally(() => removeStateDir(entry.stateDir));
+  const client = entry.instance;
+  if (!client) {
+    removeStateDir(entry.stateDir);
+    return;
+  }
+  void (async () => {
+    try {
+      const errors = await withTimeout(() => client.stop(), CLEANUP_TIMEOUT_MS);
+      if (errors.length > 0) throw new Error('Runtime shutdown reported errors');
+    } catch (error) {
+      logger.debug(`AI | copilot | Could not stop runtime: ${(error as Error).message}`, 'AI');
+      try {
+        await withTimeout(() => client.forceStop(), CLEANUP_TIMEOUT_MS);
+      } catch (forceError) {
+        logger.error(`AI | copilot | Could not force-stop runtime: ${(forceError as Error).message}`, 'AI');
+      }
+    } finally {
+      removeStateDir(entry.stateDir);
+    }
+  })();
 }
 
 /** Stops the runtime now if nothing is using it, otherwise when the last request using it finishes. */
@@ -147,32 +185,33 @@ function retireEntry(entry: ClientEntry | null): void {
   if (entry.inFlight === 0) stopEntry(entry);
 }
 
-/** Runs one cleanup call, logging rather than throwing, and never waiting longer than the cleanup timeout. */
-async function bestEffort(label: string, action: () => Promise<unknown>): Promise<void> {
+async function withTimeout<T>(action: () => Promise<T>, timeoutMs: number, onTimeout?: () => void): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
-    await Promise.race([
+    return await Promise.race([
       action(),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('timed out')), CLEANUP_TIMEOUT_MS);
+        timer = setTimeout(() => {
+          onTimeout?.();
+          reject(new Error(`Copilot operation timeout after ${timeoutMs}ms`));
+        }, timeoutMs);
         timer.unref();
       }),
     ]);
-  } catch (error) {
-    logger.debug(`AI | copilot | Could not ${label}: ${(error as Error).message}`, 'AI');
   } finally {
     clearTimeout(timer);
   }
 }
 
-/**
- * Returns the shared client for this token, starting one on first use. The
- * client is rebuilt whenever the configured token changes.
- */
-function acquireClient(token: string): ClientEntry {
-  if (currentEntry && currentEntry.token === token) return currentEntry;
+async function bestEffort(label: string, action: () => Promise<unknown>): Promise<void> {
+  try {
+    await withTimeout(action, CLEANUP_TIMEOUT_MS);
+  } catch (error) {
+    logger.debug(`AI | copilot | Could not ${label}: ${(error as Error).message}`, 'AI');
+  }
+}
 
-  retireEntry(currentEntry);
+function createEntry(token: string): ClientEntry {
   if (!exitHookRegistered) {
     exitHookRegistered = true;
     process.once('exit', () => {
@@ -183,15 +222,27 @@ function acquireClient(token: string): ClientEntry {
   const entry: ClientEntry = {
     token,
     stateDir,
-    client: startClient(token, stateDir),
+    client: Promise.resolve().then(() => startClient(entry)),
     inFlight: 0,
     retired: false,
     stopping: false,
   };
   entry.client.catch(() => {
     if (currentEntry === entry) currentEntry = null;
-    removeStateDir(stateDir);
+    retireEntry(entry);
   });
+  return entry;
+}
+
+/**
+ * Returns the shared client for this token, starting one on first use. The
+ * client is rebuilt whenever the configured token changes.
+ */
+function acquireClient(token: string): ClientEntry {
+  if (currentEntry && currentEntry.token === token) return currentEntry;
+
+  retireEntry(currentEntry);
+  const entry = createEntry(token);
   currentEntry = entry;
   return entry;
 }
@@ -201,26 +252,40 @@ function discardClient(entry: ClientEntry): void {
   retireEntry(entry);
 }
 
+function releaseClient(entry: ClientEntry): void {
+  entry.inFlight -= 1;
+  if (entry.inFlight !== 0) return;
+  if (entry.retired) {
+    stopEntry(entry);
+  } else if (currentEntry === entry) {
+    entry.idleTimer = setTimeout(() => discardClient(entry), IDLE_SHUTDOWN_MS);
+    entry.idleTimer.unref();
+  }
+}
+
 /** Runs `operation` against the shared client and stops the runtime once it has been idle for a while. */
 async function withClient<T>(
   token: string,
-  operation: (client: CopilotClient, entry: ClientEntry) => Promise<T>
+  timeoutMs: number,
+  operation: (client: CopilotClient, entry: ClientEntry, signal: AbortSignal) => Promise<T>,
+  shared = true
 ): Promise<T> {
-  const entry = acquireClient(token);
+  const entry = shared ? acquireClient(token) : createEntry(token);
+  const controller = new AbortController();
   entry.inFlight += 1;
   clearTimeout(entry.idleTimer);
   try {
-    return await operation(await entry.client, entry);
+    return await withTimeout(async () => {
+      const client = await entry.client;
+      if (controller.signal.aborted) throw new Error('Copilot operation cancelled');
+      return operation(client, entry, controller.signal);
+    }, timeoutMs, () => {
+      controller.abort();
+      discardClient(entry);
+    });
   } finally {
-    entry.inFlight -= 1;
-    if (entry.inFlight === 0) {
-      if (entry.retired) {
-        stopEntry(entry);
-      } else if (currentEntry === entry) {
-        entry.idleTimer = setTimeout(() => discardClient(entry), IDLE_SHUTDOWN_MS);
-        entry.idleTimer.unref();
-      }
-    }
+    if (!shared) retireEntry(entry);
+    releaseClient(entry);
   }
 }
 
@@ -228,12 +293,12 @@ async function withClient<T>(
 function toCopilotError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
   if (AUTH_FAILURE_PATTERN.test(message)) {
-    return new Error(
+    return new CopilotValidationError(
       'GitHub rejected the token. Use a fine-grained personal access token with the ' +
       '"Copilot Requests" permission from an account with an active Copilot subscription.'
     );
   }
-  return error instanceof Error ? error : new Error(message);
+  return error instanceof CopilotValidationError ? error : new CopilotRuntimeError(error, message);
 }
 
 /**
@@ -246,8 +311,40 @@ export async function runCopilotPrompt(request: CopilotPromptRequest): Promise<A
   const token = validateCopilotToken(request.token);
 
   try {
-    return await withClient(token, async (client, entry) => {
+    return await withClient(token, request.timeoutMs, async (client, entry, signal) => {
       let session: Awaited<ReturnType<CopilotClient['createSession']>> | undefined;
+      let cleanup: Promise<void> | undefined;
+      let creationLease = true;
+      let creationTimer: NodeJS.Timeout | undefined;
+      entry.inFlight += 1;
+      const releaseCreation = () => {
+        if (!creationLease) return;
+        creationLease = false;
+        clearTimeout(creationTimer);
+        releaseClient(entry);
+      };
+      const cleanupSession = (abort: boolean): Promise<void> => {
+        if (!session) return Promise.resolve();
+        const finished = session;
+        if (!cleanup) {
+          entry.inFlight += 1;
+          cleanup = (async () => {
+            if (abort) await bestEffort('abort the session', () => finished.abort());
+            await bestEffort('disconnect the session', () => finished.disconnect());
+            await bestEffort('delete the session', () => client.deleteSession(finished.sessionId));
+          })().finally(() => releaseClient(entry));
+        }
+        return cleanup;
+      };
+      const cancel = () => {
+        if (session) {
+          void cleanupSession(true);
+        } else if (creationLease) {
+          creationTimer = setTimeout(releaseCreation, CLEANUP_TIMEOUT_MS);
+          creationTimer.unref();
+        }
+      };
+      signal.addEventListener('abort', cancel, { once: true });
       try {
         session = await client.createSession({
           model: request.model || DEFAULT_COPILOT_MODEL,
@@ -267,6 +364,11 @@ export async function runCopilotPrompt(request: CopilotPromptRequest): Promise<A
             content: request.jsonMode ? SYSTEM_MESSAGE + JSON_SYSTEM_MESSAGE_SUFFIX : SYSTEM_MESSAGE,
           },
         });
+        if (signal.aborted) {
+          void cleanupSession(true);
+          throw new Error('Copilot operation cancelled');
+        }
+        releaseCreation();
 
         let promptTokens = 0;
         let completionTokens = 0;
@@ -287,18 +389,15 @@ export async function runCopilotPrompt(request: CopilotPromptRequest): Promise<A
             : undefined,
         };
       } catch (error) {
-        const failed = session;
-        if (failed) await bestEffort('abort the session', () => failed.abort());
+        void cleanupSession(true);
         if (TRANSPORT_FAILURE_PATTERN.test(error instanceof Error ? error.message : '')) {
           discardClient(entry);
         }
         throw error;
       } finally {
-        const finished = session;
-        if (finished) {
-          await bestEffort('disconnect the session', () => finished.disconnect());
-          await bestEffort('delete the session', () => client.deleteSession(finished.sessionId));
-        }
+        signal.removeEventListener('abort', cancel);
+        void cleanupSession(false);
+        releaseCreation();
       }
     });
   } catch (error) {
@@ -309,7 +408,7 @@ export async function runCopilotPrompt(request: CopilotPromptRequest): Promise<A
 /** Lists the models the token's Copilot plan can use. */
 export async function listCopilotModels(token: string | null | undefined): Promise<DiscoveredModel[]> {
   try {
-    const models = await withClient(validateCopilotToken(token), (client) => client.listModels());
+    const models = await withClient(validateCopilotToken(token), MODEL_DISCOVERY_TIMEOUT_MS, (client) => client.listModels(), false);
     return models
       .filter((model) => model.id && model.policy?.state !== 'disabled')
       .map((model) => {

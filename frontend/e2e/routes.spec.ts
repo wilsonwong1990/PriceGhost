@@ -242,6 +242,59 @@ test('allows admins into every admin section and exposes guarded debug', async (
   await expect(page.getByRole('heading', { name: 'Debug Access Restricted' })).toBeVisible();
 });
 
+test('defaults Copilot to auto and shows premium costs when models are synced', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  let saved: Record<string, unknown> | undefined;
+  await page.route('**/api/admin/settings/ai', async route => {
+    if (route.request().method() === 'PUT') {
+      saved = route.request().postDataJSON();
+      await route.fulfill({ json: saved });
+    } else {
+      await route.fulfill({ json: { ai_provider: 'gemini', gemini_model: 'gemini', copilot_model: null, copilot_api_key: '********' } });
+    }
+  });
+  await page.route('**/api/admin/settings/ai/copilot/models**', async route => {
+    const models = route.request().method() === 'POST'
+      ? [{ id: 'model-a', name: 'Model A', description: 'Acme, 2x premium requests' }]
+      : [];
+    await route.fulfill({ json: { models } });
+  });
+  await page.goto('/admin/ai');
+  await page.locator('select').filter({ has: page.locator('option[value="copilot"]') }).selectOption('copilot');
+  await expect(page.getByPlaceholder('auto')).toHaveValue('auto');
+  const token = page.locator('#copilot-api-key');
+  await token.focus();
+  await token.press('End');
+  await token.pressSequentially('github_pat_new');
+  await expect(token).toHaveValue('github_pat_new');
+  await page.getByRole('button', { name: /Sync/ }).click();
+  await expect(page.getByRole('option', { name: 'Model A (Acme, 2x premium requests)' })).toBeAttached();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => saved?.copilot_model).toBe('auto');
+  expect(saved?.copilot_api_key).toBe('github_pat_new');
+});
+
+test('initializes an existing Copilot configuration without overwriting an explicit model', async ({ page }) => {
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, adminUser);
+
+  let model: string | null = null;
+  await page.route('**/api/admin/settings/ai', async route => {
+    await route.fulfill({ json: { ai_provider: 'copilot', copilot_model: model, copilot_api_key: 'test-token' } });
+  });
+  await page.goto('/admin/ai');
+  await expect(page.getByPlaceholder('auto')).toHaveValue('auto');
+  model = 'my-model';
+  await page.reload();
+  await expect(page.getByPlaceholder('auto')).toHaveValue('my-model');
+});
+
 /**
  * Notification channel credentials are write-only (issue #272).
  *

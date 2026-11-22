@@ -32,12 +32,17 @@ const sdk = vi.hoisted(() => {
   const state = {
     stateDirs: [] as string[],
     forSpawnedStdio: vi.fn((options: unknown) => options),
-    clients: [] as Array<{ stop: () => Promise<void>; deleteSession: (id: string) => Promise<void> }>,
+    clients: [] as Array<{ stop: () => Promise<Error[]>; forceStop: () => Promise<void>; deleteSession: (id: string) => Promise<void> }>,
     createSessionOptions: [] as unknown[],
     sessionCalls: [] as string[],
     sendAndWait: undefined as unknown as (options: { prompt: string }, timeoutMs: number) => Promise<unknown>,
     models: [] as unknown[],
     startError: undefined as Error | undefined,
+    startGate: undefined as Promise<void> | undefined,
+    sessionGate: undefined as Promise<void> | undefined,
+    modelsGate: undefined as Promise<void> | undefined,
+    stopGate: undefined as Promise<void> | undefined,
+    disconnectGate: undefined as Promise<void> | undefined,
   };
   return state;
 });
@@ -45,7 +50,11 @@ const sdk = vi.hoisted(() => {
 vi.mock('@microsoft/copilot-sdk', () => {
   class FakeClient {
     options: unknown;
-    stop = vi.fn(async () => undefined);
+    stop = vi.fn(async () => {
+      await sdk.stopGate;
+      return [];
+    });
+    forceStop = vi.fn(async () => undefined);
     deleteSession = vi.fn(async (id: string) => {
       sdk.sessionCalls.push(`delete:${id}`);
     });
@@ -55,12 +64,15 @@ vi.mock('@microsoft/copilot-sdk', () => {
     }
     async start() {
       if (sdk.startError) throw sdk.startError;
+      await sdk.startGate;
     }
     async createSession(options: unknown) {
       sdk.createSessionOptions.push(options);
+      const sessionId = `session-${sdk.createSessionOptions.length}`;
+      await sdk.sessionGate;
       let listener: UsageListener | undefined;
       return {
-        sessionId: `session-${sdk.createSessionOptions.length}`,
+        sessionId,
         on: (handler: UsageListener) => {
           listener = handler;
           return () => undefined;
@@ -75,10 +87,12 @@ vi.mock('@microsoft/copilot-sdk', () => {
         }),
         disconnect: vi.fn(async () => {
           sdk.sessionCalls.push('disconnect');
+          await sdk.disconnectGate;
         }),
       };
     }
     async listModels() {
+      await sdk.modelsGate;
       return sdk.models;
     }
   }
@@ -111,6 +125,11 @@ describe('GitHub Copilot provider', () => {
     sdk.sessionCalls.length = 0;
     sdk.models = [];
     sdk.startError = undefined;
+    sdk.startGate = undefined;
+    sdk.sessionGate = undefined;
+    sdk.modelsGate = undefined;
+    sdk.stopGate = undefined;
+    sdk.disconnectGate = undefined;
     sdk.sendAndWait = async () => ({ data: { content: '{"price": 12.34}' } });
   });
 
@@ -128,11 +147,13 @@ describe('GitHub Copilot provider', () => {
       expect(validateCopilotToken(`  ${TOKEN}  `)).toBe(TOKEN);
       expect(() => validateCopilotToken('   ')).toThrow(/token is required/);
       expect(() => validateCopilotToken(null)).toThrow(/token is required/);
+      expect(() => validateCopilotToken(null)).toThrow(expect.objectContaining({ statusCode: 400 }));
     });
 
     it('rejects a classic personal access token with the permission to use instead', async () => {
       const { validateCopilotToken } = await load();
       expect(() => validateCopilotToken('ghp_classic')).toThrow(/Copilot Requests/);
+      expect(() => validateCopilotToken('ghp_classic')).toThrow(expect.objectContaining({ statusCode: 400 }));
     });
   });
 
@@ -201,7 +222,18 @@ describe('GitHub Copilot provider', () => {
       const { runCopilotPrompt } = await load();
       await runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 });
 
-      expect(sdk.sessionCalls).toEqual(['send:hi', 'disconnect', 'delete:session-1']);
+      await vi.waitFor(() => expect(sdk.sessionCalls).toEqual(['send:hi', 'disconnect', 'delete:session-1']));
+    });
+
+    it('returns a successful reply without waiting for stalled cleanup', async () => {
+      vi.useFakeTimers();
+      sdk.disconnectGate = new Promise(() => {});
+      const { runCopilotPrompt } = await load();
+      const result = await runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 100 });
+      expect(result.text).toBe('{"price": 12.34}');
+      expect(sdk.sessionCalls).not.toContain('delete:session-1');
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(sdk.sessionCalls).toContain('delete:session-1');
     });
 
     it('aborts and still deletes the session when the request fails', async () => {
@@ -210,8 +242,8 @@ describe('GitHub Copilot provider', () => {
       };
       const { runCopilotPrompt } = await load();
 
-      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 })).rejects.toThrow(/Timeout/);
-      expect(sdk.sessionCalls).toEqual(['send:hi', 'abort', 'disconnect', 'delete:session-1']);
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 })).rejects.toThrow(/timeout/i);
+      await vi.waitFor(() => expect(sdk.sessionCalls).toEqual(['send:hi', 'abort', 'disconnect', 'delete:session-1']));
     });
 
     it('reuses one runtime for the same token and starts another when the token changes', async () => {
@@ -251,24 +283,31 @@ describe('GitHub Copilot provider', () => {
       sdk.sendAndWait = async () => {
         throw new Error('Upstream connection refused by the model host');
       };
-      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'a', timeoutMs: 5000 })).rejects.toThrow(/refused/);
-      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'b', timeoutMs: 5000 })).rejects.toThrow(/refused/);
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'a', timeoutMs: 5000 })).rejects.toMatchObject({
+        message: 'GitHub Copilot request failed',
+        cause: expect.objectContaining({ message: 'Upstream connection refused by the model host' }),
+      });
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'b', timeoutMs: 5000 })).rejects.toThrow(/request failed/);
       expect(sdk.clients).toHaveLength(1);
 
       sdk.sendAndWait = async () => {
         throw new Error('CLI server exited unexpectedly with code 1');
       };
-      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'c', timeoutMs: 5000 })).rejects.toThrow(/exited/);
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'c', timeoutMs: 5000 })).rejects.toThrow(/request failed/);
       sdk.sendAndWait = async () => ({ data: { content: 'back' } });
       await runCopilotPrompt({ token: TOKEN, prompt: 'd', timeoutMs: 5000 });
       expect(sdk.clients).toHaveLength(2);
       await vi.waitFor(() => expect(sdk.clients[0].stop).toHaveBeenCalled());
     });
 
-    it('opts the runtime out of telemetry when the application is opted out', async () => {
+    it.each([
+      ['DISABLE_TELEMETRY', 'true', 'false'],
+      ['DO_NOT_TRACK', '1', ''],
+      ['TELEMETRY_ENABLED', 'false', 'false'],
+    ])('forces the runtime telemetry opt-out for %s', async (name, value, runtimeValue) => {
       const original = { ...process.env };
-      delete process.env.COPILOT_TELEMETRY_DISABLED;
-      process.env.DISABLE_TELEMETRY = 'true';
+      process.env.COPILOT_TELEMETRY_DISABLED = runtimeValue;
+      process.env[name] = value;
       try {
         const { runCopilotPrompt } = await load();
         await runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 });
@@ -301,6 +340,108 @@ describe('GitHub Copilot provider', () => {
       await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 })).rejects.toThrow(
         /fine-grained personal access token/
       );
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    });
+
+    it('does not expose unexpected SDK errors as client validation errors', async () => {
+      sdk.startError = Object.assign(new Error('Domain is required: internal SDK details'), { statusCode: 403 });
+      const { runCopilotPrompt } = await load();
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 })).rejects.toMatchObject({
+        message: 'GitHub Copilot request failed',
+        status: 403,
+        cause: sdk.startError,
+      });
+    });
+
+    it('times out startup and replaces the runtime without waiting for startup to settle', async () => {
+      sdk.startGate = new Promise(() => {});
+      const { runCopilotPrompt } = await load();
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 50 })).rejects.toThrow(/timeout/);
+      expect(sdk.clients[0].stop).toHaveBeenCalled();
+
+      sdk.startGate = undefined;
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'next', timeoutMs: 5000 })).resolves.toMatchObject({
+        text: '{"price": 12.34}',
+      });
+      expect(sdk.clients).toHaveLength(2);
+    });
+
+    it('cleans up a session created after the request deadline without sending the prompt', async () => {
+      let release!: () => void;
+      sdk.sessionGate = new Promise(resolve => { release = resolve; });
+      const { runCopilotPrompt } = await load();
+      await expect(runCopilotPrompt({ token: TOKEN, prompt: 'late', timeoutMs: 50 })).rejects.toThrow(/timeout/);
+      release();
+      await vi.waitFor(() => expect(sdk.sessionCalls).toContain('delete:session-1'));
+      expect(sdk.sessionCalls).toContain('abort');
+      expect(sdk.sessionCalls).not.toContain('send:late');
+    });
+
+    it('retires a runtime even if session creation never settles', async () => {
+      vi.useFakeTimers();
+      sdk.sessionGate = new Promise(() => {});
+      const { runCopilotPrompt } = await load();
+      const request = runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 100 });
+      const result = expect(request).rejects.toThrow(/timeout/);
+      await vi.advanceTimersByTimeAsync(101);
+      await result;
+      expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(sdk.clients[0].stop).toHaveBeenCalled();
+    });
+
+    it('cleans up a late session without interrupting an unrelated active request', async () => {
+      let releaseSession!: () => void;
+      let releaseOther!: () => void;
+      sdk.sessionGate = new Promise(resolve => { releaseSession = resolve; });
+      sdk.sendAndWait = () => new Promise(resolve => {
+        releaseOther = () => resolve({ data: { content: 'done' } });
+      });
+      const { runCopilotPrompt } = await load();
+      const first = runCopilotPrompt({ token: TOKEN, prompt: 'late', timeoutMs: 300 });
+      const firstResult = expect(first).rejects.toThrow(/timeout/);
+      await vi.waitFor(() => expect(sdk.createSessionOptions).toHaveLength(1));
+      sdk.sessionGate = undefined;
+      const second = runCopilotPrompt({ token: TOKEN, prompt: 'other', timeoutMs: 5000 });
+      await vi.waitFor(() => expect(sdk.sessionCalls).toContain('send:other'));
+      await firstResult;
+      releaseOther();
+      expect((await second).text).toBe('done');
+      expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+      releaseSession();
+      await vi.waitFor(() => expect(sdk.sessionCalls).toContain('abort'));
+      await vi.waitFor(() => expect(sdk.sessionCalls).toContain('delete:session-1'));
+      expect(sdk.sessionCalls).not.toContain('send:late');
+      await vi.waitFor(() => expect(sdk.clients[0].stop).toHaveBeenCalled());
+    });
+
+    it('aborts a hung prompt while allowing another request on the same runtime to finish', async () => {
+      let release!: () => void;
+      sdk.sendAndWait = ({ prompt }) => prompt === 'hung'
+        ? new Promise(() => {})
+        : new Promise(resolve => { release = () => resolve({ data: { content: 'done' } }); });
+      const { runCopilotPrompt } = await load();
+      const first = runCopilotPrompt({ token: TOKEN, prompt: 'hung', timeoutMs: 200 });
+      await vi.waitFor(() => expect(sdk.sessionCalls).toContain('send:hung'));
+      const second = runCopilotPrompt({ token: TOKEN, prompt: 'other', timeoutMs: 5000 });
+      await vi.waitFor(() => expect(sdk.sessionCalls).toContain('send:other'));
+      await expect(first).rejects.toThrow(/timeout/);
+      expect(sdk.sessionCalls).toContain('abort');
+      expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+      release();
+      expect((await second).text).toBe('done');
+      await vi.waitFor(() => expect(sdk.clients[0].stop).toHaveBeenCalled());
+    });
+
+    it('force-stops a runtime when graceful shutdown hangs', async () => {
+      vi.useFakeTimers();
+      sdk.stopGate = new Promise(() => {});
+      const { runCopilotPrompt } = await load();
+      await runCopilotPrompt({ token: TOKEN, prompt: 'hi', timeoutMs: 5000 });
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 5001);
+      expect(sdk.clients[0].forceStop).toHaveBeenCalled();
     });
   });
 
@@ -317,6 +458,40 @@ describe('GitHub Copilot provider', () => {
         { id: 'a-model', name: 'Alpha', description: 'Acme' },
         { id: 'z-model', name: 'Zeta', description: 'Acme, 2x premium requests' },
       ]);
+    });
+
+    it('uses a fresh discovery runtime without replacing the foreground runtime', async () => {
+      const { listCopilotModels, runCopilotPrompt } = await load();
+      await runCopilotPrompt({ token: TOKEN, prompt: 'first', timeoutMs: 5000 });
+      sdk.models = [{ id: 'one', name: 'One' }];
+      expect((await listCopilotModels(TOKEN))[0].id).toBe('one');
+      sdk.models = [{ id: 'two', name: 'Two' }];
+      expect((await listCopilotModels(TOKEN))[0].id).toBe('two');
+      await runCopilotPrompt({ token: TOKEN, prompt: 'second', timeoutMs: 5000 });
+      expect(sdk.clients).toHaveLength(3);
+      expect(sdk.clients[0].stop).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(sdk.clients[1].stop).toHaveBeenCalled());
+      await vi.waitFor(() => expect(sdk.clients[2].stop).toHaveBeenCalled());
+    });
+
+    it('times out model discovery and retires its runtime', async () => {
+      vi.useFakeTimers();
+      sdk.modelsGate = new Promise(() => {});
+      const { listCopilotModels } = await load();
+      const result = listCopilotModels(TOKEN);
+      const expectation = expect(result).rejects.toThrow(/timeout/);
+      await vi.advanceTimersByTimeAsync(10001);
+      await expectation;
+      expect(sdk.clients[0].stop).toHaveBeenCalled();
+    });
+
+    it('returns sanitized client errors for discovery authentication failures', async () => {
+      sdk.startError = new Error('401 Bad credentials');
+      const { listCopilotModels } = await load();
+      await expect(listCopilotModels(TOKEN)).rejects.toMatchObject({
+        statusCode: 400,
+        message: expect.stringContaining('fine-grained personal access token'),
+      });
     });
   });
 
@@ -335,22 +510,23 @@ describe('GitHub Copilot provider', () => {
       expect(sdk.sessionCalls[0]).toBe('send:what is the price?');
     });
 
-    it('masks the stored token and drops a masked token echoed back on save', async () => {
+    it.each(['true', 'false'])('keeps the stored token write-only with REDACT_API_KEYS=%s', async (redact) => {
       vi.resetModules();
       const { AISettingsService } = await import('../../src/services/domain/system/settings/ai');
       const originalEnv = process.env.REDACT_API_KEYS;
-      process.env.REDACT_API_KEYS = 'true';
+      process.env.REDACT_API_KEYS = redact;
       try {
         repo.getAISettings.mockResolvedValue(storedSettings({ copilot_api_key: TOKEN }));
         repo.updateAISettings.mockResolvedValue(storedSettings({}));
         const service = new AISettingsService();
 
         const settings = await service.getAISettings();
-        expect(settings.copilot_api_key).not.toBe(TOKEN);
-        expect(settings.copilot_api_key).toContain('...');
+        expect(settings.copilot_api_key).toBe('********');
 
         await service.updateAISettings({ copilot_api_key: settings.copilot_api_key, copilot_model: 'gpt-5' }, 7);
         expect(repo.updateAISettings).toHaveBeenCalledWith({ copilot_model: 'gpt-5' });
+        await service.updateAISettings({ copilot_api_key: '' }, 7);
+        expect(repo.updateAISettings).toHaveBeenLastCalledWith({ copilot_api_key: '' });
       } finally {
         process.env.REDACT_API_KEYS = originalEnv;
       }
@@ -363,10 +539,37 @@ describe('GitHub Copilot provider', () => {
       repo.getAISettings.mockResolvedValue(storedSettings({ copilot_api_key: TOKEN }));
       repo.set.mockResolvedValue(undefined as never);
 
-      const result = await new AISettingsService().refreshProviderModels('copilot', { apiKey: 'gith...7890' });
+      const result = await new AISettingsService().refreshProviderModels('copilot', { apiKey: '********' });
 
       expect(result.models).toEqual([{ id: 'gpt-5', name: 'GPT-5', description: undefined }]);
       expect(sdk.clients).toHaveLength(1);
+    });
+
+    it('rejects modified Copilot placeholders instead of silently retaining the stored token', async () => {
+      const { AISettingsService } = await import('../../src/services/domain/system/settings/ai');
+      repo.getAISettings.mockResolvedValue(storedSettings({ copilot_api_key: TOKEN }));
+      const service = new AISettingsService();
+      await expect(service.updateAISettings({ copilot_api_key: '********replacement' }, 7)).rejects.toMatchObject({
+        statusCode: 400,
+      });
+      expect(repo.updateAISettings).not.toHaveBeenCalled();
+      await expect(service.refreshProviderModels('copilot', { apiKey: '********replacement' })).rejects.toMatchObject({
+        statusCode: 400,
+      });
+      expect(sdk.clients).toHaveLength(0);
+    });
+
+    it('omits API keys from both general settings responses while leaving repository reads intact', async () => {
+      const { SystemSettingsService } = await import('../../src/services/domain/system/settings/system');
+      const raw = { copilot_api_key: TOKEN, openai_api_key: 'secret', ai_provider: 'copilot', browser_timeout: '1000' };
+      repo.getAll.mockResolvedValue(raw);
+      repo.set.mockResolvedValue(undefined);
+      const service = new SystemSettingsService();
+      expect(await service.getSettings()).toEqual({ ai_provider: 'copilot', browser_timeout: '1000' });
+      expect(await service.updateSettings({ browser_timeout: 1000 }, 7)).toEqual({
+        ai_provider: 'copilot', browser_timeout: '1000',
+      });
+      expect(await repo.getAll()).toEqual(raw);
     });
   });
 });

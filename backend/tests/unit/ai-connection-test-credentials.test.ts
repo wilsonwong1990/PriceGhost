@@ -28,8 +28,10 @@ vi.mock('../../src/utils/system/logger', () => ({
 }));
 
 const testGeminiConnection = vi.fn();
+const testCopilotConnection = vi.fn();
 vi.mock('../../src/services/ai', () => ({
   testGeminiConnection: (...args: unknown[]) => testGeminiConnection(...args),
+  testCopilotConnection: (...args: unknown[]) => testCopilotConnection(...args),
 }));
 
 const repo = vi.mocked(systemSettingsRepository);
@@ -57,6 +59,15 @@ afterAll(() => {
 
 async function postGeminiTest(body: Record<string, unknown>) {
   const response = await fetch(`http://127.0.0.1:${port}/api/admin/settings/ai/test-gemini`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+async function postCopilotTest(body: Record<string, unknown>) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/admin/settings/ai/test-copilot`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -118,5 +129,26 @@ describe('AI connection test credential resolution', () => {
     expect(result.status).toBe(400);
     expect(result.body).toEqual({ error: 'API key is required' });
     expect(testGeminiConnection).not.toHaveBeenCalled();
+  });
+
+  it('returns actionable Copilot validation errors but hides unexpected errors', async () => {
+    const validationError = Object.assign(new Error('Use a fine-grained token'), { statusCode: 400 });
+    testCopilotConnection.mockRejectedValueOnce(validationError);
+    expect(await postCopilotTest({ api_key: 'ghp_classic' })).toEqual({
+      status: 400, body: { error: 'Use a fine-grained token' },
+    });
+
+    testCopilotConnection.mockRejectedValueOnce(new Error('internal SDK details'));
+    expect(await postCopilotTest({ api_key: 'github_pat_test' })).toEqual({
+      status: 500, body: { error: 'Connection failed' },
+    });
+  });
+
+  it('rejects a modified saved-token placeholder instead of testing the old token', async () => {
+    expect(await postCopilotTest({ api_key: '********replacement' })).toEqual({
+      status: 400, body: { error: 'Enter a new GitHub token without the saved-token placeholder.' },
+    });
+    expect(testCopilotConnection).not.toHaveBeenCalled();
+    expect(repo.getAISettings).not.toHaveBeenCalled();
   });
 });
