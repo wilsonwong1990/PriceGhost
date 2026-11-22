@@ -41,7 +41,7 @@ export default function ModelSelector({
   useEffect(() => {
     if (value && !choices.some(m => m.id === value)) {
       setIsCustomMode(true);
-    } else if (value !== previousValue.current) {
+    } else if (value && value !== previousValue.current) {
       setIsCustomMode(false);
     }
     previousValue.current = value;

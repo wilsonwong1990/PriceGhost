@@ -332,6 +332,8 @@ test('saves and verifies Copilot routing choices without losing the previous tie
   await expect(model).toHaveValue('fusion');
   await expect(page.locator('#copilot-fusion-tier')).toHaveValue('max');
   await model.selectOption('__custom__');
+  await page.getByPlaceholder('auto').fill('');
+  await expect(page.getByPlaceholder('auto')).toBeVisible();
   await page.getByPlaceholder('auto').fill('custom-model');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(model).toHaveValue('fusion');
