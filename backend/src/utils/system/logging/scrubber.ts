@@ -3,8 +3,8 @@
  */
 export const scrubUrlCredentials = (val: string): string => {
   if (typeof val !== 'string') return val;
-  // Replace username:password in URL (http://user:pass@host)
-  return val.replace(/(https?:\/\/)([^:]+):([^@]+)(@[^\s/?#]+)/gi, '$1[REDACTED]:[REDACTED]$4');
+  return val.replace(/(\b[a-z][a-z0-9+.-]*:\/\/)([^\s/?#]+)@/gi,
+    (_match, scheme: string, userinfo: string) => `${scheme}${userinfo.includes(':') ? '[REDACTED]:[REDACTED]' : '[REDACTED]'}@`);
 };
 
 /**
@@ -40,7 +40,7 @@ export const scrubSensitiveData = (data: any): any => {
         if (key.toLowerCase().includes('proxy') && typeof val === 'boolean') {
           scrubbed[key] = val;
         } else if (typeof val === 'string') {
-          if (val.match(/https?:\/\//i)) {
+          if (val.match(/\b[a-z][a-z0-9+.-]*:\/\//i)) {
             scrubbed[key] = scrubUrlCredentials(val);
           } else {
             scrubbed[key] = '[REDACTED]';

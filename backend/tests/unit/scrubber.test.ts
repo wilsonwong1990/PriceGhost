@@ -1,8 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import { scrubSensitiveData, scrubUrlCredentials } from '../../src/utils/system/logging/scrubber';
+import { scrubUrlCredentials as scrubScraperUrl } from '../../../scraper/src/utils/scrub';
 
 describe('Scrubber Unit Tests', () => {
   describe('scrubUrlCredentials', () => {
+    it.each(['http', 'https', 'socks', 'socks4', 'socks5', 'socks5h'])('redacts %s userinfo in both services', scheme => {
+      for (const scrub of [scrubUrlCredentials, scrubScraperUrl]) {
+        expect(scrub(`proxy ${scheme}://user:secret@proxy.example:1080`))
+          .toBe(`proxy ${scheme}://[REDACTED]:[REDACTED]@proxy.example:1080`);
+        expect(scrub(`${scheme}://user@proxy.example:1080`))
+          .toBe(`${scheme}://[REDACTED]@proxy.example:1080`);
+        expect(scrub(`${scheme}://user:sec@ret@proxy.example:1080`))
+          .toBe(`${scheme}://[REDACTED]:[REDACTED]@proxy.example:1080`);
+      }
+      expect(scrubSensitiveData({ proxyUrl: `${scheme}://user:secret@proxy.example:1080` }).proxyUrl)
+        .toBe(`${scheme}://[REDACTED]:[REDACTED]@proxy.example:1080`);
+    });
     it('should mask credentials in proxy URLs', () => {
       const url = 'http://user:pass123@example.com:8080/some/path';
       const scrubbed = scrubUrlCredentials(url);

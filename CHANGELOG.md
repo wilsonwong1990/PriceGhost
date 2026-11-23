@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after the first call, so on the new Puppeteer that check would have
   stopped reaching the browser and reported a wedged session as healthy.
 
+### Fixed
+
+- Corrected Firefox pool reservations, request language headers, debug engine
+  saves, and proxy credential redaction for SOCKS URLs.
+
 ## [2.2.0-beta.3] - 2026-11-15
 
 ### Added

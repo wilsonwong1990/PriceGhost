@@ -33,7 +33,10 @@ router.post('/scrape', async (req, res) => {
 
   const browserEngine = resolveBrowserEngine(options.browserEngine);
   if (!browserEngine) {
-    return res.status(400).json({ error: `Unknown browserEngine: ${String(options.browserEngine)}` });
+    const value = typeof options.browserEngine === 'string'
+      ? options.browserEngine
+      : JSON.stringify(options.browserEngine);
+    return res.status(400).json({ error: `Unknown browserEngine: ${value}` });
   }
 
   let session: BrowserSession | null;
@@ -53,7 +56,6 @@ router.post('/scrape', async (req, res) => {
     });
   }
 
-  session.totalScrapes++;
   session.lastActivity = Date.now();
   
   log(`Scraping: ${url} (Session: ${session.id}, Active: ${session.activePages}, Total: ${session.totalScrapes}) [Engine: ${session.browserEngine}, Proxy: ${proxyForLog}, UA: ${options.userAgent || 'None'}, Ref: ${options.referrer || 'None'}]`, 'INFO', context);

@@ -14,6 +14,7 @@
  */
 
 import { parseUserAgent } from '../utils/userAgent.js';
+import { scrubUrlCredentials } from '../utils/scrub.js';
 
 export const BROWSER_ENGINES = ['chromium', 'firefox'] as const;
 export type BrowserEngine = (typeof BROWSER_ENGINES)[number];
@@ -38,7 +39,7 @@ export class BrowserLaunchError extends Error {
   readonly engine: BrowserEngine;
 
   constructor(engine: BrowserEngine, cause: unknown) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
+    const reason = scrubUrlCredentials(cause instanceof Error ? cause.message : String(cause));
     super(`Could not launch ${engine}: ${reason}`);
     this.name = 'BrowserLaunchError';
     this.engine = engine;

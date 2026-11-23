@@ -55,15 +55,17 @@ async function prepareChromiumPage(page: ScraperPage, options: ScrapeOptions, co
  * emulation do not exist on BiDi and are skipped rather than attempted.
  */
 async function prepareFirefoxPage(page: ScraperPage, options: ScrapeOptions, context: LogContext): Promise<void> {
-  if (options.referrer) {
+  const headers: Record<string, string> = {};
+  if (options.referrer) headers.Referer = options.referrer;
+  if (options.acceptLanguage) headers['Accept-Language'] = options.acceptLanguage;
+  if (Object.keys(headers).length > 0) {
     // BiDi ignores `goto`'s `referer` option, so the header is the only way to
     // send one. An older Firefox without `network.setExtraHeaders` loses the
     // referrer rather than the scrape.
-    log(`Setting referrer: ${options.referrer}`, 'DEBUG', context);
     try {
-      await page.setExtraHTTPHeaders({ 'Referer': options.referrer });
+      await page.setExtraHTTPHeaders(headers);
     } catch (error) {
-      log(`Firefox could not set the referrer: ${errorMessage(error)}`, 'DEBUG', context);
+      log(`Firefox could not set extra headers: ${errorMessage(error)}`, 'WARN', context);
     }
   }
 

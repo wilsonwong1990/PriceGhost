@@ -215,6 +215,17 @@ describe('the route never logs proxy credentials', () => {
 });
 
 describe('the route resolves the browser engine before taking a session', () => {
+  it('rejects object values without invoking their toString property', async () => {
+    const response = await postScrape({
+      url: 'https://example.test/product',
+      options: { browserEngine: { toString: null } },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Unknown browserEngine: {"toString":null}' });
+    expect(acquireSession).not.toHaveBeenCalled();
+  });
+
   it('answers 400 for an engine the scraper does not have', async () => {
     const response = await postScrape({
       url: 'https://www.bigw.com.au/product/x/p/1',
