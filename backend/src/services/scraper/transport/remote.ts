@@ -137,8 +137,9 @@ export async function fetchRemoteScrape(url: string, remoteScraperUrl: string, o
         ...(cartToken ? { headers: { Authorization: `Bearer ${cartToken}` }, maxRedirects: 0 } : {}),
       });
       const servedEngine = response.data?.browserEngine;
-      if (options.browserEngine && servedEngine !== options.browserEngine) {
-        throw new BrowserEngineMismatchError(options.browserEngine, servedEngine);
+      const requestedEngine = options.browserEngine ?? (isCartRequest ? 'chromium' : undefined);
+      if (requestedEngine !== undefined && servedEngine !== requestedEngine) {
+        throw new BrowserEngineMismatchError(requestedEngine, servedEngine);
       }
 
       const latency = Date.now() - start;

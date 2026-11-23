@@ -10,7 +10,7 @@ import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { scrubUrlCredentials } from '../utils/scrub.js';
 import { amazonTarget } from '../services/AmazonCart.js';
-import { BrowserLaunchError, TargetSessionEngineMismatchError, resolveBrowserEngine } from '../core/engine.js';
+import { BrowserLaunchError, TargetSessionCartGuardMismatchError, TargetSessionEngineMismatchError, resolveBrowserEngine } from '../core/engine.js';
 
 const router = express.Router();
 
@@ -57,7 +57,9 @@ async function handleScrape(req: Request, res: Response) {
     session = await SessionService.acquireSession({ ...options, browserEngine }, abortController.signal);
   } catch (error) {
     if (abortController.signal.aborted) return;
-    if (error instanceof TargetSessionEngineMismatchError) return res.status(409).json({ error: error.message });
+    if (error instanceof TargetSessionEngineMismatchError || error instanceof TargetSessionCartGuardMismatchError) {
+      return res.status(409).json({ error: error.message });
+    }
     if (!(error instanceof BrowserLaunchError)) throw error;
     log(`${error.message} for ${url}`, 'ERROR', context);
     return res.status(500).json({ error: error.message });

@@ -78,4 +78,3 @@ export function readAmazonCartObservation(value: unknown, target: AmazonTarget):
     currency: target.currency,
   };
 }
-

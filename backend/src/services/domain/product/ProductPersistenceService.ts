@@ -42,14 +42,18 @@ function hasVerifiedCart(scraped: ScrapedProductWithVoting, source: string): boo
 }
 
 export class ProductPersistenceService {
-  async rememberAmazonCartRequirement(productId: number, userId: number, unavailableReason?: string): Promise<void> {
+  async rememberAmazonCartRequirement(
+    productId: number, userId: number, unavailableReason?: string, expectedLastChecked?: Date | null
+  ): Promise<void> {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock($1)', [productId]);
       const product = await productRepository.findById(productId, userId, { executor: client });
       if (!product) throw new Error('Product not found');
-      if (product.preferred_extraction_method !== AMAZON_CART_METHOD || unavailableReason) {
+      const superseded = expectedLastChecked !== undefined &&
+        (product.last_checked?.getTime() ?? null) !== (expectedLastChecked?.getTime() ?? null);
+      if (!superseded && (product.preferred_extraction_method !== AMAZON_CART_METHOD || unavailableReason)) {
         await productRepository.markAmazonCartRequired(productId, unavailableReason, client);
       }
       await client.query('COMMIT');
@@ -214,7 +218,7 @@ export class ProductPersistenceService {
     }
 
     const sanitizedImage = sanitizeProductImage(scrapedData.imageUrl, product.image_url);
-    if (sanitizedImage) {
+    if (sanitizedImage && (!scrapedData.amazonCartRequired || !product.image_url)) {
       metadataUpdates.image_url = sanitizedImage;
     }
 

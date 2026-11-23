@@ -26,7 +26,14 @@ export class ProductAddService {
     const cleanedUrl = target?.productUrl || cleanUrl(url);
     
     // Check for duplicate
-    const existingId = await productRepository.findDuplicateUrl(cleanedUrl, userId);
+    let existingId = await productRepository.findDuplicateUrl(cleanedUrl, userId);
+    const duplicateTarget = amazonTarget(cleanedUrl.replace(/#unverified-amazon-selection$/, ''));
+    if (!existingId && duplicateTarget) {
+      const alternate = /^\/gp\/product\//i.test(new URL(cleanedUrl).pathname)
+        ? duplicateTarget.productUrl
+        : duplicateTarget.productUrl.replace('/dp/', '/gp/product/');
+      existingId = await productRepository.findDuplicateUrl(alternate, userId);
+    }
     if (existingId) {
       const err = new Error('Duplicate product');
       (err as any).statusCode = 409;

@@ -99,6 +99,13 @@ checkout. Amazon may retain the item in its guest cart after the check. The
 price is the guest item price, not a checkout total; account discounts,
 delivery, and taxes may differ.
 
+Chromium is the default browser. An administrator can select **Firefox** for
+the Amazon retailer under **Admin > Retailers > Browser Engine**, with the
+browser scraper enabled and the matching scraper image installed. Firefox may
+receive a different response, but it does not guarantee access. Both engines
+keep page scripts disabled during cart checks and stop at unresolved Amazon
+validation or CAPTCHA pages without retrying or signing in.
+
 The check only reports a price when it can verify the item, new condition,
 offer, quantity, and amount. If Amazon blocks the request or the page does not
 provide enough evidence, the price is unavailable rather than replaced by a
@@ -119,9 +126,9 @@ The cart check requires a plain Amazon.com or Amazon.com.au HTTPS product URL
 containing an ASIN. Other Amazon marketplaces, short links and alternate
 subdomains cannot use this check; use a supported product URL instead.
 Seller, offer, condition, variant parameters, and URL fragments cannot yet be
-verified; use a plain product URL only when its default offer is the one you
-want to track. When enabling an existing listing, the stored URL may already
-have had selection parameters removed; the check tracks the current default
+verified; use a plain product URL only when you want to track an Amazon-sold
+new offer. When enabling an existing listing, the stored URL may already
+have had selection parameters removed; the check tracks an Amazon-sold new
 offer, not necessarily the original seller.
 To stop cart checks, stop tracking the listing.
 Other Amazon marketplaces are not covered by this check. Live compatibility has

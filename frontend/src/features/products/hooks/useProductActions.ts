@@ -37,20 +37,17 @@ export function useProductActions({ onProductDeleted, onProductDeleteFailed, onP
         clearUnverifiedCartPrice(id);
         onRefreshUnverified?.(id);
       }
-      await Promise.all([
+      void Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.products.all }),
         queryClient.invalidateQueries({ queryKey: queryKeys.products.items }),
         queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) }),
         invalidateProductHistory(id),
-      ]);
+      ]).catch((reloadError: unknown) => showToast('Failed to reload product', 'error', apiErrorMessage(reloadError)));
       if (cartUnverified) {
-        try {
-          const updated = await ProductService.getById(id);
+        void ProductService.getById(id).then((updated) => {
           syncProductCaches(updated);
           onProductUpdated?.(id, updated);
-        } catch (reloadError) {
-          throw new Error(`${apiErrorMessage(error)} Failed to reload product: ${apiErrorMessage(reloadError)}`);
-        }
+        }).catch((reloadError: unknown) => showToast('Failed to reload product', 'error', apiErrorMessage(reloadError)));
       }
       throw error;
     }
@@ -78,8 +75,30 @@ export function useProductActions({ onProductDeleted, onProductDeleteFailed, onP
 
   const handleRescan = (id: number, amazonCart = false) => runAction(async () => {
     setActiveProductId(id);
-    const res = await ProductService.scan(id, amazonCart);
+    let res: PriceReviewResponse;
+    try {
+      res = await ProductService.scan(id, amazonCart);
+    } catch (error) {
+      const cached = queryClient.getQueryData<Product>(queryKeys.products.detail(id)) ??
+        queryClient.getQueryData<Product[]>(queryKeys.products.all)?.find((product) => product.id === id);
+      if ((amazonCart || cached?.preferred_extraction_method === 'amazon-cart') &&
+          (!isApiError(error) || error.status >= 500)) {
+        clearUnverifiedCartPrice(id);
+        onRefreshUnverified?.(id);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.products.all })
+          .catch((reloadError: unknown) => showToast('Failed to reload product', 'error', apiErrorMessage(reloadError)));
+        void ProductService.getById(id).then((updated) => {
+          syncProductCaches(updated);
+          onProductUpdated?.(id, updated);
+        }).catch((reloadError: unknown) => showToast('Failed to reload product', 'error', apiErrorMessage(reloadError)));
+      }
+      throw error;
+    }
     if (res.amazonCartRequired) {
+      if (amazonCart || !res.priceCandidates.some((candidate) => candidate.method === 'amazon-cart')) {
+        clearUnverifiedCartPrice(id);
+        onRefreshUnverified?.(id);
+      }
       const updatedProduct = await ProductService.getById(id);
       syncProductCaches(updatedProduct);
       await queryClient.invalidateQueries({ queryKey: queryKeys.products.items });
@@ -153,7 +172,13 @@ export function useProductActions({ onProductDeleted, onProductDeleteFailed, onP
         : `Product #${activeProductId} updated via re-scan`;
       setActiveProductId(null);
       showToast(successMsg, 'success');
-    } catch (err: any) {
+    } catch (err: unknown) {
+      if (selectedMethod === 'amazon-cart' && isApiError(err) && err.status === 409) {
+        clearUnverifiedCartPrice(activeProductId);
+        onRefreshUnverified?.(activeProductId);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.products.all })
+          .catch((reloadError: unknown) => showToast('Failed to reload product', 'error', apiErrorMessage(reloadError)));
+      }
       showToast('Failed to confirm selection', 'error', apiErrorMessage(err));
     }
   };

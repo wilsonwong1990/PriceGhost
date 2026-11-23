@@ -118,6 +118,7 @@ describePostgres('Amazon cart persistence against PostgreSQL', () => {
       `UPDATE items SET name = 'Custom name', image_url = 'https://example.test/custom.jpg'
        WHERE id = (SELECT item_id FROM products WHERE id = $1)`, [listing.id]
     );
+    await pool.query('UPDATE products SET image_url = $1 WHERE id = $2', ['https://example.test/listing.jpg', listing.id]);
     await productPersistenceService.saveScrapeResult(listing.id, userId, {
       ...later, name: 'Different title', imageUrl: 'https://m.media-amazon.com/images/I/other.jpg',
     }, 'refresh');
@@ -126,6 +127,29 @@ describePostgres('Amazon cart persistence against PostgreSQL', () => {
       [listing.id]
     );
     expect(result.rows[0]).toEqual({ name: 'Custom name', image_url: 'https://example.test/custom.jpg' });
+    expect((await productRepository.findById(listing.id, userId))?.image_url).toBe('https://example.test/listing.jpg');
+  });
+
+  it('ignores only the synthetic Amazon marker in duplicate lookups', async () => {
+    await pool.query('UPDATE products SET url = $1 WHERE id = $2', [`${base.url}#unverified-amazon-selection`, productId]);
+    expect(await productRepository.findDuplicateUrl(base.url, userId)).toBe(productId);
+    expect(await productRepository.findDuplicateUrl(`${base.url}#unverified-amazon-selection`, userId)).toBe(productId);
+    expect(await productRepository.findDuplicateUrl('https://www.amazon.com.au/dp/B012345678', userId)).toBeNull();
+    expect(await productRepository.findDuplicateUrl(`${base.url}?seller=other`, userId)).toBeNull();
+    expect(await productRepository.findDuplicateUrl(base.url, userId + 999999)).toBeNull();
+    await pool.query('UPDATE products SET url = $1 WHERE id = $2', ['https://www.amazon.com/dp/b012345678', productId]);
+    expect(await productRepository.findDuplicateUrl(base.url, userId)).toBe(productId);
+  });
+
+  it('does not let an older failed confirmation hide a newer successful refresh', async () => {
+    const snapshot = (await productRepository.findById(productId, userId))?.last_checked ?? null;
+    await productPersistenceService.saveScrapeResult(productId, userId, { ...verified }, 'refresh');
+    await productPersistenceService.rememberAmazonCartRequirement(
+      productId, userId, 'amazon_cart_price_unavailable', snapshot
+    );
+    const current = await productRepository.findById(productId, userId);
+    expect(current?.current_price).toBe(249.99);
+    expect(current?.unavailable_reason).toBeNull();
   });
 
   it('keeps earlier offer prices in history but excludes them from current and minimum cart prices', async () => {

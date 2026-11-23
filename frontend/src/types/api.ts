@@ -30,6 +30,7 @@ export interface Product {
   failure_streak?: number;
   last_failure_at?: string | null;
   id: number;
+  is_primary?: boolean;
   user_id: number;
   url: string;
   name: string | null;

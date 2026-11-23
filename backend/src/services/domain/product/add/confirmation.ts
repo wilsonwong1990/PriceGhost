@@ -29,6 +29,7 @@ async function verifyCartSelection(
   selectedPrice: unknown,
   selectedCurrency: unknown,
   productId?: number,
+  lastChecked?: Date | null,
 ) {
   if (typeof selectedPrice !== 'number' || !Number.isFinite(selectedPrice) || selectedPrice <= 0 ||
       typeof selectedCurrency !== 'string' || !selectedCurrency) {
@@ -41,9 +42,15 @@ async function verifyCartSelection(
     url, userId, AMAZON_CART_METHOD, undefined, undefined, undefined, undefined, productId, { allowAmazonCart: true }
   );
   const observation = scraped.amazonCartObservation;
+  const markUnverified = async () => {
+    if (productId === undefined) return;
+    const reason = scraped.unavailableReason || 'amazon_cart_price_unavailable';
+    await productPersistenceService.rememberAmazonCartRequirement(productId, userId, reason, lastChecked);
+  };
   if (!scraped.amazonCartRequired || !observation || scraped.needsReview ||
       !scraped.price || scraped.price.price !== observation.price ||
       scraped.price.currency !== observation.currency) {
+    await markUnverified();
     const error: Error & { statusCode?: number } = new Error(
       'The Amazon cart price could not be verified again. Refresh and try again.'
     );
@@ -51,6 +58,7 @@ async function verifyCartSelection(
     throw error;
   }
   if (scraped.price.price !== selectedPrice || scraped.price.currency !== selectedCurrency) {
+    await markUnverified();
     const error: Error & { statusCode?: number } = new Error(
       'The Amazon cart price changed. Refresh before confirming it.'
     );
@@ -150,7 +158,7 @@ export class ProductConfirmationService {
       await productPersistenceService.rememberAmazonCartRequirement(productId, userId);
     }
     const verifiedCart = cartRequired
-      ? await verifyCartSelection(userId, product.url, selectedPrice, selectedCurrency, productId)
+      ? await verifyCartSelection(userId, product.url, selectedPrice, selectedCurrency, productId, product.last_checked)
       : null;
     const persistence = await productPersistenceService.saveScrapeResult(
       productId,

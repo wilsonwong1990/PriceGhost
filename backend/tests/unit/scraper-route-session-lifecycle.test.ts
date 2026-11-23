@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { sessions } from '../../../scraper/src/core/SessionManager';
 import type { BrowserSession, ScrapeResult } from '../../../scraper/src/types';
-import { BrowserLaunchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
+import { BrowserLaunchError, TargetSessionCartGuardMismatchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
 
 /**
  * The scrape route's session lifecycle (issues #254, #255).
@@ -100,6 +100,35 @@ const postScrape = (body: unknown, init: RequestInit = {}) =>
     body: JSON.stringify(body),
     ...init,
   });
+
+describe('Firefox cart profile conflicts', () => {
+  it.each(['/scrape', '/amazon/cart-price'])('returns an explicit conflict on %s without scraping or retiring a session', async endpoint => {
+    const token = 'c'.repeat(32);
+    vi.stubEnv('AMAZON_CART_SCRAPER_TOKEN', token);
+    acquireSession.mockRejectedValueOnce(new TargetSessionCartGuardMismatchError());
+    try {
+      const response = await fetch(`${baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          url: 'https://www.amazon.com/dp/B012345678',
+          options: {
+            browserEngine: 'firefox', sessionId: acquired.session?.id,
+            ...(endpoint === '/amazon/cart-price' ? { amazonCartMode: 'required' } : {}),
+          },
+        }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: 'Target session uses different Amazon cart scripting guards' });
+      expect(scrape).not.toHaveBeenCalled();
+      expect(releaseSession).not.toHaveBeenCalled();
+      expect(acquired.session?.activePages).toBe(1);
+      expect(acquired.session?.tainted).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
 
 describe('a completed scrape keeps its session (issue #254)', () => {
   it('returns a healthy session to the warm pool', async () => {

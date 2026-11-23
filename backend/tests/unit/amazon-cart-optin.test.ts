@@ -65,6 +65,23 @@ describe('Amazon cart opt-in on product creation', () => {
     expect(mocks.save).toHaveBeenCalledWith(42, 1, verified, 'manual-add');
   });
 
+  it.each([
+    ['https://www.amazon.com/gp/product/B012345678', { amazonCart: true }, 'https://www.amazon.com/gp/product/B012345678'],
+    ['https://www.amazon.com/gp/product/B012345678', {}, url],
+    [`${url}?psc=1`, {}, 'https://www.amazon.com/gp/product/B012345678'],
+  ])('checks the alternate default-offer path for %s', async (input, options, alternate) => {
+    mocks.findDuplicateUrl.mockResolvedValueOnce(null).mockResolvedValueOnce(42);
+    const { productAddService } = await import('../../src/services/domain/product/add');
+    await expect(productAddService.addProduct(1, input, options)).rejects.toMatchObject({ statusCode: 409, existingProductId: 42 });
+    expect(mocks.findDuplicateUrl).toHaveBeenLastCalledWith(alternate, 1);
+  });
+
+  it('does not equate an explicitly selected seller with the default offer', async () => {
+    const { productAddService } = await import('../../src/services/domain/product/add');
+    await productAddService.addProduct(1, `${url}?seller=other`, {});
+    expect(mocks.findDuplicateUrl).toHaveBeenCalledTimes(1);
+  });
+
   it('does not create or start an unbound review when cart verification fails', async () => {
     mocks.scrape.mockResolvedValue({ ...verified, price: null, needsReview: true, amazonCartObservation: undefined });
     const { productAddService } = await import('../../src/services/domain/product/add');

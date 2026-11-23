@@ -287,7 +287,7 @@ for (const reloadFails of [false, true]) {
     await expect(page.getByText('A current new-item cart price could not be verified.')).toBeVisible();
     await expect(page.getByText(/Failed to refresh price: Amazon cart price could not be verified/)).toBeVisible();
     if (reloadFails) {
-      await expect(page.getByText(/Failed to reload product: Product reload failed/)).toBeVisible();
+      await expect(page.getByText('Failed to reload product')).toBeVisible();
     }
   });
 }
@@ -318,6 +318,97 @@ test('hides a previous cart price on the dashboard while the reload is pending',
   await page.getByTitle('Refresh Price').click();
   await expect(page.getByText('$249.99')).toHaveCount(0);
   await expect(page.getByText('Acceptance Product')).toBeVisible();
+  await expect(page.getByText(/Failed to refresh price: Amazon cart price could not be verified/)).toBeVisible();
+});
+
+test('hides the old price before an unverified cart rescan reload finishes', async ({ page }) => {
+  let scanned = false;
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1/scan', async route => {
+    scanned = true;
+    await route.fulfill({ json: {
+      needsReview: true, amazonCartRequired: true, priceCandidates: [],
+      name: product.name, url: 'https://www.amazon.com/dp/B012345678', reviewReason: 'manual_rescan',
+    } });
+  });
+  await page.route('**/api/products/1', async route => {
+    if (scanned) return;
+    await route.fulfill({ json: product });
+  });
+  await page.goto('/products/1');
+  await expect(page.locator('.product-detail-price')).toContainText('$25.00');
+  await page.getByRole('button', { name: 'Troubleshoot Price' }).click();
+  await expect(page.locator('.product-detail-price')).toContainText('Price unavailable');
+});
+
+test('hides the old price if an opted-in cart scan fails after it starts', async ({ page }) => {
+  let failed = false;
+  const amazon = { ...product, url: 'https://www.amazon.com/dp/B012345678' };
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1', async route => {
+    if (failed) return;
+    await route.fulfill({ json: amazon });
+  });
+  await page.route('**/api/products/1/scan', async route => {
+    failed = true;
+    await route.fulfill({ status: 503, json: { error: 'Scraper unavailable' } });
+  });
+  await page.goto('/products/1');
+  await expect(page.locator('.product-detail-price')).toContainText('$25.00');
+  await page.getByRole('button', { name: 'Track Amazon Cart Price' }).click();
+  await page.getByRole('button', { name: 'Track Cart Price' }).click();
+  await expect(page.getByText('Failed to start re-scan: Scraper unavailable')).toBeVisible();
+  await expect(page.locator('.product-detail-price')).toContainText('Price unavailable');
+});
+
+test('reconciles an ordinary listing if a failed cart scan never reached the backend', async ({ page }) => {
+  const amazon = { ...product, url: 'https://www.amazon.com/dp/B012345678' };
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1', async route => route.fulfill({ json: amazon }));
+  await page.route('**/api/products/1/scan', async route => route.fulfill({
+    status: 503, json: { error: 'Request failed before reaching the backend' },
+  }));
+  await page.goto('/products/1');
+  await expect(page.locator('.product-detail-price')).toContainText('$25.00');
+  await page.getByRole('button', { name: 'Track Amazon Cart Price' }).click();
+  await page.getByRole('button', { name: 'Track Cart Price' }).click();
+  await expect(page.getByText('Failed to start re-scan: Request failed before reaching the backend')).toBeVisible();
+  await expect(page.locator('.product-detail-price')).toContainText('$25.00');
+});
+
+test('hides a stale cart price when confirmation cannot reverify it', async ({ page }) => {
+  const cart = {
+    ...product, url: 'https://www.amazon.com/dp/B012345678',
+    current_price: 249.99, preferred_extraction_method: 'amazon-cart', unavailable_reason: null,
+  };
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1', async route => route.fulfill({ json: cart }));
+  await page.route('**/api/products/1/scan', async route => route.fulfill({ json: {
+    needsReview: true, amazonCartRequired: true, name: cart.name, url: cart.url,
+    priceCandidates: [{ price: 249.99, currency: 'USD', method: 'amazon-cart', confidence: 1 }],
+    reviewReason: 'manual_rescan',
+  } }));
+  await page.route('**/api/products/1/confirm', async route => route.fulfill({
+    status: 409, json: { error: 'The Amazon cart price could not be verified again.' },
+  }));
+  await page.goto('/products/1');
+  await expect(page.locator('.product-detail-price')).toContainText('$249.99');
+  await page.getByRole('button', { name: 'Troubleshoot Price' }).click();
+  await page.getByRole('button', { name: 'Confirm Selection' }).click();
+  await expect(page.getByText('Failed to confirm selection')).toBeVisible();
+  await expect(page.locator('.product-detail-price')).toContainText('Price unavailable');
 });
 
 test('hides the old price and prevents manual entry after a failed Amazon rescan', async ({ page }) => {
@@ -399,7 +490,7 @@ test('explains and confirms cart opt-in before rescanning an existing listing', 
   });
   await page.goto('/products/1');
   await page.getByRole('button', { name: 'Track Amazon Cart Price' }).click();
-  await expect(page.getByText(/Each check adds one item to a temporary guest cart/)).toBeVisible();
+  await expect(page.getByText(/Each check adds one item to an anonymous guest cart; no order is placed, but Amazon may retain the item/)).toBeVisible();
   expect(submitted).toBeUndefined();
   await page.getByRole('button', { name: 'Track Cart Price' }).click();
   await expect.poll(() => submitted?.amazonCart).toBe(true);

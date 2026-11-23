@@ -131,12 +131,22 @@ describe('Amazon cart confirmation boundary', () => {
     expect(mocks.saveScrapeResult).toHaveBeenCalledWith(42, 1, verifiedScrape, 'refresh', undefined);
   });
 
+  it('marks an existing cart listing unavailable when confirmation cannot reverify it', async () => {
+    const { productConfirmationService } = await import('../../src/services/domain/product/add/confirmation');
+    await expect(productConfirmationService.confirmProductSelection(1, 42, {
+      selectedPrice: 249.99, selectedCurrency: 'USD', selectedMethod: 'amazon-cart',
+    })).rejects.toMatchObject({ statusCode: 409 });
+    expect(mocks.rememberAmazonCartRequirement).toHaveBeenCalledWith(42, 1, 'amazon_cart_price_unavailable', undefined);
+    expect(mocks.saveScrapeResult).not.toHaveBeenCalled();
+  });
+
   it('rejects a confirmed selection if the newly verified cart price changed', async () => {
     mocks.scrape.mockResolvedValue(verifiedScrape);
     const { productConfirmationService } = await import('../../src/services/domain/product/add/confirmation');
     await expect(productConfirmationService.confirmProductSelection(1, 42, {
       selectedPrice: 99, selectedCurrency: 'USD', selectedMethod: 'amazon-cart',
     })).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('price changed') });
+    expect(mocks.rememberAmazonCartRequirement).toHaveBeenCalledWith(42, 1, 'amazon_cart_price_unavailable', undefined);
     expect(mocks.saveScrapeResult).not.toHaveBeenCalled();
   });
 
@@ -167,12 +177,26 @@ describe('Amazon cart confirmation boundary', () => {
     mocks.findById.mockResolvedValueOnce({
       id: 42, url: 'https://www.amazon.com/dp/B012345678', preferred_extraction_method: null,
     });
+
     const { productRescanService } = await import('../../src/services/domain/product/add/rescan');
     const result = await productRescanService.scanProduct(1, 42, true);
     expect(result.amazonCartRequired).toBe(true);
     expect(mocks.rememberAmazonCartRequirement).toHaveBeenCalledWith(42, 1);
     expect(mocks.rememberAmazonCartRequirement.mock.invocationCallOrder[0]).toBeLessThan(mocks.scrape.mock.invocationCallOrder[0]);
-    expect(mocks.rememberAmazonCartRequirement).toHaveBeenCalledWith(42, 1, 'amazon_cart_price_unavailable');
+    expect(mocks.rememberAmazonCartRequirement).toHaveBeenCalledWith(42, 1, 'amazon_cart_price_unavailable', undefined);
+  });
+
+  it('uses the original observation timestamp to guard a failed rescan', async () => {
+    const lastChecked = new Date('2026-01-01T00:00:00Z');
+    mocks.findById.mockResolvedValueOnce({
+      id: 42, url: 'https://www.amazon.com/dp/B012345678',
+      preferred_extraction_method: 'amazon-cart', last_checked: lastChecked,
+    });
+    const { productRescanService } = await import('../../src/services/domain/product/add/rescan');
+    await productRescanService.scanProduct(1, 42);
+    expect(mocks.rememberAmazonCartRequirement).toHaveBeenCalledWith(
+      42, 1, 'amazon_cart_price_unavailable', lastChecked
+    );
   });
 
   it('does not allow cart pricing on a non-Amazon URL', async () => {

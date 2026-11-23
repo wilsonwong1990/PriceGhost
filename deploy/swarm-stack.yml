@@ -76,7 +76,6 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
-      AMAZON_CART_SCRAPER_TOKEN: ${AMAZON_CART_SCRAPER_TOKEN:-}
       # SSO config (added 2026-04-27 when prod migrated from Traefik forward-auth
       # to in-app OIDC). ENABLE_SSO must be a string, not bool, for compose.
       ENABLE_SSO: "true"
@@ -90,8 +89,13 @@ services:
       - /bin/sh
       - -c
       - |
+        set -e
         export DATABASE_URL="postgresql://postgres:$$(cat /run/secrets/pg_pricestalker_pass)@postgres:5432/priceghost"
         export JWT_SECRET="$$(cat /run/secrets/pg_pricestalker_jwt)"
+        if [ -f /run/secrets/amazon_cart_scraper_token ]; then
+          AMAZON_CART_SCRAPER_TOKEN="$$(cat /run/secrets/amazon_cart_scraper_token)"
+          export AMAZON_CART_SCRAPER_TOKEN
+        fi
         exec docker-entrypoint.sh node dist/index.js
     networks:
       - pricestalker-internal
@@ -136,7 +140,6 @@ services:
     # defaults in docs/developer/ENVIRONMENT_VARIABLES.md.
     environment:
       PORT: "5100"
-      AMAZON_CART_SCRAPER_TOKEN: ${AMAZON_CART_SCRAPER_TOKEN:-}
       MAX_BROWSERS: ${SCRAPER_MAX_BROWSERS:-3}
       MAX_PAGES_PER_BROWSER: ${SCRAPER_MAX_PAGES:-4}
       MAX_SCRAPES_PER_BROWSER: ${SCRAPER_MAX_SCRAPES:-50}
@@ -145,6 +148,16 @@ services:
       # Kept under /tmp so it lands on the capped tmpfs mounted below rather
       # than the node's overlay storage (issue #52).
       PROFILE_BASE_DIR: ${SCRAPER_PROFILE_BASE_DIR:-/tmp/scraper-profiles}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ -f /run/secrets/amazon_cart_scraper_token ]; then
+          AMAZON_CART_SCRAPER_TOKEN="$$(cat /run/secrets/amazon_cart_scraper_token)"
+          export AMAZON_CART_SCRAPER_TOKEN
+        fi
+        exec node dist/scraper.js
     # Chromium re-parents its orphaned helper processes onto PID 1; without a
     # reaper they accumulate as <defunct> until the kernel PID table is
     # exhausted (issue #206). `docker stack deploy` does map this onto the

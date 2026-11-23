@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   allowAmazonRequest,
   amazonTarget,
   hasHiddenCartPrice,
+  guardFirefoxAmazonRequest,
   isAmazonCheckpointPage,
   readCartPrice,
   validateAmazonForm,
@@ -26,6 +27,7 @@ const form: AmazonForm = {
     ['condition', 'New'],
   ],
   conditions: ['New'],
+  seller: 'Amazon.com',
 };
 const amazonOffersForm: AmazonForm = {
   action: 'https://www.amazon.com/cart/add-to-cart/ref=aod_dpdsk_new_0',
@@ -68,6 +70,25 @@ function request(overrides: Partial<AmazonRequest> = {}): AmazonRequest {
 }
 
 describe('isolated Amazon cart validation', () => {
+  it.each([
+    '/gp/add-to-cart/html', '/gp/aws/cart/add.html', '/gp/cart/add-to-cart.html',
+    '/cart/add-to-cart/ref=aod_dpdsk_new_0',
+  ])('requires the Amazon seller on every accepted action family: %s', path => {
+    const candidate = path.startsWith('/cart/') ? amazonOffersForm : form;
+    const action = `${target.origin}${path}`;
+    expect(validateAmazonForm({ ...candidate, action }, target)).not.toBeNull();
+    for (const seller of [undefined, null, 'Another seller', 'Amazon Resale']) {
+      expect(validateAmazonForm({ ...candidate, action, seller }, target)).toBeNull();
+    }
+  });
+
+  it('requires the local Amazon seller for Australian offers', () => {
+    const australian = amazonTarget('https://www.amazon.com.au/dp/B012345678')!;
+    const action = `${australian.origin}/cart/add-to-cart/ref=aod_dpdsk_new_0`;
+    expect(validateAmazonForm({ ...amazonOffersForm, action }, australian)).toBeNull();
+    expect(validateAmazonForm({ ...amazonOffersForm, action, seller: 'Amazon.com.au' }, australian)).not.toBeNull();
+  });
+
   it('accepts only safe product metadata without session-bearing URLs', () => {
     expect(readAmazonCartMetadata({ metadata: {
       name: 'Fixture product', imageUrl: 'https://m.media-amazon.com/images/I/fixture.jpg',
@@ -166,6 +187,8 @@ describe('isolated Amazon cart validation', () => {
       { ...form, action: `${form.action}?extra=1` },
       { ...form, action: 'https://www.amazon.com/checkout' },
       { ...form, conditions: [] },
+      { ...form, seller: 'Third-party seller' },
+      { ...form, seller: null },
       { ...form, conditions: ['Used'] },
       { ...form, conditions: ['New', 'Used'] },
       { ...form, fields: form.fields.filter(([name]) => name !== 'offeringID.1') },
@@ -183,6 +206,10 @@ describe('isolated Amazon cart validation', () => {
 
   it('accepts only the Amazon-sold new offer form from the offers panel', () => {
     expect(validateAmazonForm(amazonOffersForm, target)).toMatchObject({ offerId: 'offer-1' });
+    // Without scripts Amazon leaves quantity blank; the permit pins it to 1.
+    const blankQuantity = validateAmazonForm({ ...amazonOffersForm, fields: amazonOffersForm.fields.map(([name, value]) =>
+      [name, name.endsWith('[quantity]') ? '' : value]) }, target);
+    expect(blankQuantity?.fields).toContainEqual(['items[0.base][quantity]', '1']);
     const invalid: AmazonForm[] = [
       { ...amazonOffersForm, seller: 'Amazon Resale' },
       { ...amazonOffersForm, seller: 'Third-party seller' },
@@ -208,6 +235,74 @@ describe('isolated Amazon cart validation', () => {
     expect(allowAmazonRequest(request({
       url: 'https://www.amazon.com/gp/cart/view.html', method: 'GET', postData: undefined,
     }), state)).toBe(true);
+  });
+
+  it('replaces Firefox POST bytes with the validated form and blocks replay', async () => {
+    const state = guard();
+    const mainFrame = {};
+    const intercepted = {
+      url: () => form.action,
+      method: () => 'POST',
+      headers: () => ({
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': '999',
+        'Transfer-Encoding': 'chunked',
+      }),
+      frame: () => mainFrame,
+      isNavigationRequest: () => true,
+      continue: vi.fn().mockResolvedValue(undefined),
+      abort: vi.fn().mockResolvedValue(undefined),
+    };
+    await guardFirefoxAmazonRequest(intercepted, mainFrame, state);
+    expect(intercepted.continue).toHaveBeenCalledWith({
+      postData: new URLSearchParams(form.fields).toString(),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    await guardFirefoxAmazonRequest(intercepted, mainFrame, state);
+    expect(intercepted.continue).toHaveBeenCalledOnce();
+    expect(intercepted.abort).toHaveBeenCalledOnce();
+  });
+
+  it.each(['subframe', 'subresource', 'checkout', 'wrong-host', 'missing-permit'])(
+    'blocks an unsafe Firefox %s request before continuation',
+    async unsafe => {
+      const state = guard();
+      if (unsafe === 'missing-permit') state.permit = null;
+      const mainFrame = {};
+      const intercepted = {
+        url: () => unsafe === 'checkout' ? `${target.origin}/checkout` :
+          unsafe === 'wrong-host' ? 'https://outside.test/gp/add-to-cart/html' : form.action,
+        method: () => 'POST',
+        headers: () => ({ 'Content-Type': 'application/x-www-form-urlencoded' }),
+        frame: () => unsafe === 'subframe' ? {} : mainFrame,
+        isNavigationRequest: () => unsafe !== 'subresource',
+        continue: vi.fn().mockResolvedValue(undefined),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+      await guardFirefoxAmazonRequest(intercepted, mainFrame, state);
+      expect(intercepted.continue).not.toHaveBeenCalled();
+      expect(intercepted.abort).toHaveBeenCalledOnce();
+      expect(state.mutationSent).toBe(false);
+    },
+  );
+
+  it('propagates a Firefox continuation failure without reopening its mutation slot', async () => {
+    const state = guard();
+    const mainFrame = {};
+    const intercepted = {
+      url: () => form.action,
+      method: () => 'POST',
+      headers: () => ({ 'Content-Type': 'application/x-www-form-urlencoded' }),
+      frame: () => mainFrame,
+      isNavigationRequest: () => true,
+      continue: vi.fn().mockRejectedValue(new Error('interception failed')),
+      abort: vi.fn().mockResolvedValue(undefined),
+    };
+    await expect(guardFirefoxAmazonRequest(intercepted, mainFrame, state)).rejects.toThrow('interception failed');
+    expect(state.mutationSent).toBe(true);
+    await guardFirefoxAmazonRequest(intercepted, mainFrame, state);
+    expect(intercepted.continue).toHaveBeenCalledOnce();
+    expect(intercepted.abort).toHaveBeenCalledOnce();
   });
 
   it('blocks alternate endpoints, frames, requests and altered form bodies', () => {
@@ -278,13 +373,14 @@ describe('isolated Amazon cart validation', () => {
 
   it('requires the cart row to prove the same new offer, ASIN, quantity, and one unambiguous price', () => {
     expect(readCartPrice([row], target, 'offer-1')).toBe(249.99);
+    // The exact validated offer ID proves the condition when the cart omits its label.
+    expect(readCartPrice([{ ...row, conditions: [] }], target, 'offer-1')).toBe(249.99);
     const invalid: CartRow[][] = [
       [],
       [row, row],
       [{ ...row, asin: 'B012345679' }],
       [{ ...row, offerIds: [] }],
       [{ ...row, offerIds: ['different-offer'] }],
-      [{ ...row, conditions: [] }],
       [{ ...row, conditions: ['Used'] }],
       [{ ...row, conditions: ['New', 'Used'] }],
       [{ ...row, quantities: [] }],

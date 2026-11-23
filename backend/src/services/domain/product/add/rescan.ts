@@ -39,6 +39,7 @@ export class ProductRescanService {
         productId,
         userId,
         scrapedData.amazonCartObservation ? undefined : scrapedData.unavailableReason || 'amazon_cart_price_unavailable',
+        scrapedData.amazonCartObservation ? undefined : product.last_checked,
       );
     }
 

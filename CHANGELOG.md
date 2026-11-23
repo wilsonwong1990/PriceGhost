@@ -23,6 +23,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Chromium page. Adds migration 026. The Debug page can run and save the
   engine too.
 
+- GitHub Copilot AI provider. Authenticate with a fine-grained personal access
+  token that has the Copilot Requests permission, entered under Admin -> AI
+  Engine. The token is stored write-only, and the model list can be synced from
+  the token's Copilot plan. Requests run through the bundled GitHub Copilot SDK in a
+  restricted runtime process with every tool disabled, and each session is
+  deleted once the reply is received (best-effort).
+- Copilot Auto routing preferences and Fusion Standard, High, and Max tiers can
+  be selected in Admin when available to the token owner's account.
+- Experimental opt-in guest-cart checks for Amazon.com and Amazon.com.au listings that
+  hide their new-item price until the item is added to a cart. Checks use an
+  isolated anonymous cart, select only a new offer sold by Amazon, never enter
+  checkout, and warn that Amazon may retain the item in its guest cart. Checks
+  report the price as unavailable when the item, condition, offer, or amount
+  cannot be verified. Amazon validation checkpoints are not bypassed. Earlier
+  page prices remain in history but are not compared with cart prices. The
+  current browser scraper is required. Both Chromium and Firefox support
+  guarded checks; Firefox sends only the validated one-item form body and
+  rejects checkout, subframe requests, and repeated cart submissions. Stopped
+  checks log the stage that failed (challenge, offer selection, submission, or
+  cart verification) without page content or offer identifiers. Failed
+  confirmation and refresh checks hide stale cart prices immediately, and
+  cart checks preserve listing images. Swarm deployments can opt in using a
+  shared Docker secret instead of exposing the token in service configuration.
+
 ### Changed
 
 - The Browser Scraper now runs on Puppeteer 25 (up from 22). Chromium
@@ -39,26 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Corrected Firefox pool reservations, request language headers, debug engine
   saves, and proxy credential redaction for SOCKS URLs.
-
-- GitHub Copilot AI provider. Authenticate with a fine-grained personal access
-  token that has the Copilot Requests permission, entered under Admin -> AI
-  Engine. The token is stored write-only, and the model list can be synced from
-  the token's Copilot plan. Requests run through the bundled GitHub Copilot SDK in a
-  restricted runtime process with every tool disabled, and each session is
-  deleted once the reply is received (best-effort).
-- Copilot Auto routing preferences and Fusion Standard, High, and Max tiers can
-  be selected in Admin when available to the token owner's account.
-- Experimental opt-in guest-cart checks for Amazon.com and Amazon.com.au listings that
-  hide their new-item price until the item is added to a cart. Checks use an
-  isolated anonymous cart, select only a new offer sold by Amazon, never enter
-  checkout, and warn that Amazon may retain the item in its guest cart. Checks
-  report the price as unavailable when the item, condition, offer, or amount
-  cannot be verified. Amazon validation checkpoints are not bypassed. Earlier
-  page prices remain in history but are not compared with cart prices. The
-  current browser scraper is required.
-
-### Fixed
-
 - General system settings responses no longer expose stored AI API keys.
 - Copilot requests and model discovery now time out, honor environment
   telemetry opt-outs, and show actionable token errors and premium-request

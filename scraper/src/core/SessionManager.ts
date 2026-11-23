@@ -12,7 +12,7 @@ import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { isProcessGone, isSessionResponsive, type ProbeProcess } from './health.js';
 import { findReusableSession } from './pool.js';
-import { BrowserLaunchError, TargetSessionEngineMismatchError, buildFirefoxPrefs, DEFAULT_BROWSER_ENGINE, shouldApplyUserAgentToFirefox, type BrowserEngine } from './engine.js';
+import { BrowserLaunchError, TargetSessionCartGuardMismatchError, TargetSessionEngineMismatchError, buildFirefoxPrefs, DEFAULT_BROWSER_ENGINE, shouldApplyUserAgentToFirefox, type BrowserEngine } from './engine.js';
 import { scrubUrlCredentials } from '../utils/scrub.js';
 
 interface PuppeteerExtra {
@@ -406,13 +406,13 @@ function launchChromium(userDataDir: string, proxyUrl: string | null, userAgent:
  * (proxy, User-Agent) is set with preferences, because BiDi has no per-page
  * equivalent of the CDP overrides the Chromium path uses.
  */
-function launchFirefox(userDataDir: string, proxyUrl: string | null, userAgent: string | null): Promise<Browser> {
+function launchFirefox(userDataDir: string, proxyUrl: string | null, userAgent: string | null, amazonCartOnly: boolean): Promise<Browser> {
   return puppeteerVanilla.launch({
     browser: 'firefox',
     executablePath: firefoxExecutablePath(),
     headless: true,
     userDataDir,
-    extraPrefsFirefox: buildFirefoxPrefs(proxyUrl, userAgent),
+    extraPrefsFirefox: buildFirefoxPrefs(proxyUrl, userAgent, amazonCartOnly),
     // Puppeteer points Firefox's remote settings at a dummy server, but ESR and
     // release builds ignore that override unless this is set, and would
     // otherwise contact Mozilla's settings servers (through the proxy, if one
@@ -431,7 +431,8 @@ function firefoxExecutablePath(): string {
 export function createNewSession(
   proxyUrl: string | null = null,
   userAgent: string | null = null,
-  browserEngine: BrowserEngine = DEFAULT_BROWSER_ENGINE
+  browserEngine: BrowserEngine = DEFAULT_BROWSER_ENGINE,
+  amazonCartOnly = false
 ): BrowserSession {
   if (browserEngine === 'firefox' && !shouldApplyUserAgentToFirefox(userAgent)) userAgent = null;
   const id = `session_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
@@ -448,6 +449,7 @@ export function createNewSession(
     proxyUrl,
     userAgent,
     browserEngine,
+    amazonCartOnly,
     lastActivity: Date.now(),
     userDataDir,
     tainted: false,
@@ -458,7 +460,7 @@ export function createNewSession(
   log(`Launching new ${browserEngine} instance for ${id} (Proxy: ${proxyForLog}, UA: ${userAgent ? 'Custom' : 'Default'})`, 'INFO');
   session.launchPromise = fs.mkdir(userDataDir, { recursive: true }).then(() =>
     browserEngine === 'firefox'
-      ? launchFirefox(userDataDir, proxyUrl, userAgent)
+      ? launchFirefox(userDataDir, proxyUrl, userAgent, amazonCartOnly)
       : launchChromium(userDataDir, proxyUrl, userAgent)
   ).then((browser: Browser) => {
     session.browser = browser;
@@ -543,6 +545,8 @@ let poolSelection: Promise<void> = Promise.resolve();
 export async function getBrowserSession(options: ScrapeOptions = {}, signal?: AbortSignal): Promise<BrowserSession | null> {
   const reqProxy = options.proxyUrl || null;
   const reqEngine = options.browserEngine || DEFAULT_BROWSER_ENGINE;
+  const amazonCartOnly = reqEngine === 'firefox' &&
+    (options.amazonCartMode === 'auto' || options.amazonCartMode === 'required');
   const requestedUA = options.userAgent || null;
   const reqUA = reqEngine === 'firefox' && !shouldApplyUserAgentToFirefox(requestedUA) ? null : requestedUA;
   const forceNew = options.forceNewSession === true;
@@ -556,7 +560,7 @@ export async function getBrowserSession(options: ScrapeOptions = {}, signal?: Ab
   await previous;
   let selected: BrowserSession | null;
   try {
-    selected = signal?.aborted ? null : await selectSession(reqProxy, reqUA, reqEngine, forceNew, targetId, signal);
+    selected = signal?.aborted ? null : await selectSession(reqProxy, reqUA, reqEngine, amazonCartOnly, forceNew, targetId, signal);
   } finally {
     unlock();
   }
@@ -567,6 +571,7 @@ async function selectSession(
   reqProxy: string | null,
   reqUA: string | null,
   reqEngine: BrowserEngine,
+  amazonCartOnly: boolean,
   forceNew: boolean,
   targetId: string | null,
   signal?: AbortSignal
@@ -575,6 +580,7 @@ async function selectSession(
   if (targetId) {
     const namedSession = sessions.find(s => s.id === targetId);
     if (namedSession && namedSession.browserEngine !== reqEngine) throw new TargetSessionEngineMismatchError();
+    if (namedSession && Boolean(namedSession.amazonCartOnly) !== amazonCartOnly) throw new TargetSessionCartGuardMismatchError();
     const target = sessions.find(s => s.id === targetId && s.browserEngine === reqEngine && !s.tainted && s.activePages < MAX_PAGES_PER_BROWSER && s.totalScrapes < MAX_SCRAPES_PER_BROWSER && (!s.browser || s.browser.connected));
     if (target && (!target.browser || (await isSessionResponsive(target))) && sessions.includes(target) && !target.tainted && !signal?.aborted) {
       return reserveSession(target);
@@ -595,7 +601,7 @@ async function selectSession(
   if (!forceNew) {
     const session = await findReusableSession({
       pool: sessions,
-      match: { proxyUrl: reqProxy, userAgent: reqUA, browserEngine: reqEngine },
+      match: { proxyUrl: reqProxy, userAgent: reqUA, browserEngine: reqEngine, amazonCartOnly },
       limits: { maxPagesPerBrowser: MAX_PAGES_PER_BROWSER, maxScrapesPerBrowser: MAX_SCRAPES_PER_BROWSER },
       probe: candidate => isSessionResponsive(candidate),
       discard: async candidate => {
@@ -612,7 +618,7 @@ async function selectSession(
   // recycling a healthy session for a launch that cannot succeed.
   if (reqEngine === 'firefox') {
     try {
-      buildFirefoxPrefs(reqProxy, reqUA);
+      buildFirefoxPrefs(reqProxy, reqUA, amazonCartOnly);
       await fs.access(firefoxExecutablePath(), fsConstants.X_OK);
     } catch (e) {
       throw new BrowserLaunchError(reqEngine, e);
@@ -639,5 +645,5 @@ async function selectSession(
 
   // 4. Create New Session
   if (signal?.aborted) return null;
-  return reserveSession(createNewSession(reqProxy, reqUA, reqEngine));
+  return reserveSession(createNewSession(reqProxy, reqUA, reqEngine, amazonCartOnly));
 }

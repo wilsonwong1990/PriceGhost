@@ -28,6 +28,16 @@ The **System** tab in the Admin Panel provides the core configurations for netwo
   or authenticated TLS if traffic crosses untrusted hosts or networks. See
   [environment variables](../developer/ENVIRONMENT_VARIABLES.md).
 
+  For Swarm, create a Docker secret from a securely generated token, then
+  deploy with both `deploy/swarm-stack.yml` and the optional
+  `deploy/swarm-amazon-cart.yml` overlay (`docker stack deploy -c
+  deploy/swarm-stack.yml -c deploy/swarm-amazon-cart.yml --with-registry-auth
+  pricestalker`). The default external secret name is
+  `pricestalker_amazon_cart_token`. The overlay mounts it in both services
+  without putting its value in the service specification. To rotate it, create
+  a new Docker secret, set `AMAZON_CART_SWARM_SECRET_NAME` to its name, and
+  redeploy with both files. Without the overlay, cart checks remain disabled.
+
 ---
 
 ## 2. Product Tracking

@@ -55,6 +55,8 @@ export interface BrowserSession {
   userAgent: string | null;
   /** Fixed at launch, like the proxy and User-Agent, so it is part of the pool key. */
   browserEngine: BrowserEngine;
+  /** Firefox cart profiles disable content scripting and service workers at launch. */
+  amazonCartOnly?: boolean;
   lastActivity: number;
   userDataDir: string | null;
   /**

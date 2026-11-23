@@ -1,4 +1,4 @@
-import type { Product, ProductWithStats } from '../types/api';
+import type { ItemWithListings, Product, ProductWithStats, UserProfile } from '../types/api';
 import { queryClient } from './queryClient';
 import { queryKeys } from './queries';
 
@@ -17,6 +17,7 @@ export function syncProductCaches(updated: Product): void {
  * reload cannot leave the previous verified price on screen.
  */
 export function clearUnverifiedCartPrice(productId: number): void {
+  void queryClient.cancelQueries({ queryKey: queryKeys.products.all });
   const clear = <T extends Product>(product: T): T => ({
     ...product,
     current_price: null,
@@ -31,6 +32,41 @@ export function clearUnverifiedCartPrice(productId: number): void {
   );
   queryClient.setQueryData<ProductWithStats>(queryKeys.products.detail(productId), (product) =>
     product ? clear(product) : product,
+  );
+  queryClient.setQueryData<ItemWithListings[]>(queryKeys.products.items, (items) =>
+    items?.map((item) => {
+      if (!item.listings.some((listing) => listing.id === productId)) return item;
+      const listings = item.listings.map((listing) => listing.id === productId ? clear(listing) : listing);
+      const profile = queryClient.getQueryData<UserProfile>(queryKeys.profile);
+      const sourceOrder = [...listings].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      const primary = sourceOrder.find((listing) => listing.is_primary) ?? sourceOrder[0];
+      const fallback = sourceOrder.find((listing) => listing.currency);
+      const ambiguousFallback = fallback && sourceOrder.some((listing) =>
+        listing !== fallback && listing.created_at === fallback.created_at &&
+        listing.currency && listing.currency !== fallback.currency);
+      const currency = profile?.currency === null
+        ? primary?.currency || (ambiguousFallback ? null : fallback?.currency) || null
+        : profile?.currency || item.best_price_currency;
+      const prices = listings.flatMap((listing) => {
+        const price = profile?.currency === null
+          ? listing.currency === currency ? listing.current_price : null
+          : listing.converted_price;
+        return typeof price === 'number' && Number.isFinite(price) ? [{ id: listing.id, price }] : [];
+      });
+      const best = prices.length ? Math.min(...prices.map((entry) => entry.price)) : null;
+      const worst = prices.length ? Math.max(...prices.map((entry) => entry.price)) : null;
+      const spread = best !== null && worst !== null && prices.length > 1
+        ? Math.round((worst - best) * 100) / 100 : null;
+      return {
+        ...item, listings, best_price: best,
+        best_price_currency: best === null ? null : currency,
+        best_price_listing_ids: best === null ? [] : prices.filter((entry) => entry.price === best).map((entry) => entry.id),
+        comparable_count: prices.length, excluded_count: listings.length - prices.length,
+        price_spread: spread, all_tied: prices.length > 1 && spread === 0,
+        any_in_stock: listings.some((listing) =>
+          listing.stock_status === 'in_stock' && listing.preferred_extraction_method !== 'amazon-cart'),
+      };
+    }),
   );
 }
 

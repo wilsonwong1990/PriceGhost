@@ -212,12 +212,22 @@ describe('fetchRemoteHtml', () => {
 
   it('preserves challenge evidence from the Amazon endpoint', async () => {
     vi.mocked(axios.post).mockResolvedValueOnce({
-      data: { amazonCart: { required: true, status: 'unavailable' }, challengeDetected: false },
+      data: { browserEngine: 'chromium', amazonCart: { required: true, status: 'unavailable' }, challengeDetected: false },
     });
     const result = await fetchRemoteScrape('https://www.amazon.com/dp/B012345678', 'http://remotescraper:5100', {
       amazonCartMode: 'required',
     });
     expect(result.challengeDetected).toBe(false);
+  });
+
+  it.each([undefined, 'firefox', 'webkit', 1])('requires a confirmed Chromium receipt for a default cart check: %s', async browserEngine => {
+    vi.mocked(axios.post).mockResolvedValueOnce({
+      data: { browserEngine, challengeDetected: false, amazonCart: { required: true, status: 'verified' } },
+    });
+    await expect(fetchRemoteScrape('https://www.amazon.com/dp/B012345678', 'http://remotescraper:5100', {
+      amazonCartMode: 'required',
+    })).rejects.toBeInstanceOf(BrowserEngineMismatchError);
+    expect(axios.post).toHaveBeenCalledOnce();
   });
 
   it.each([undefined, 'chromium'])('rejects cart evidence with an unexpected Firefox engine receipt: %s', async browserEngine => {
@@ -246,7 +256,7 @@ describe('fetchRemoteHtml', () => {
     { challengeDetected: null },
     { challengeDetected: 0 },
   ])('does not trust missing or malformed challenge metadata', async metadata => {
-    vi.mocked(axios.post).mockResolvedValueOnce({ data: metadata });
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: { browserEngine: 'chromium', ...metadata } });
     const result = await fetchRemoteScrape('https://www.amazon.com/dp/B012345678', 'http://remotescraper:5100', {
       amazonCartMode: 'required',
     });
