@@ -60,7 +60,7 @@ export class ProductRescanService {
       imageUrl: scrapedData.imageUrl,
       stockStatus: scrapedData.stockStatus,
       priceCandidates: candidates,
-      reviewReason: 'manual_rescan',
+      reviewReason: scrapedData.failureReason === 'variant_selection_required' ? 'variant_selection_required' : 'manual_rescan',
       url: product.url,
       id: productId,
       html: scrapedData.html ? scrapedData.html.substring(0, 100_000) : null
