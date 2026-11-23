@@ -10,6 +10,7 @@ import { ProductService } from '../../services/ProductService';
 import { queryClient } from '../../../../api/queryClient';
 import { useToast } from '../../../../context/ToastContext';
 import ConfirmationModal from '../../../../components/ConfirmationModal';
+import { isAmazonCartUrl } from '../../../../utils/amazonCart';
 
 interface OverviewSectionProps {
   product: any;
@@ -132,7 +133,7 @@ const OverviewSection: React.FC<OverviewSectionProps> = ({
           <ProductActions 
             handleRefresh={state.handleRefresh}
             handleRescan={state.handleRescan}
-            handleAmazonCartScan={product?.preferred_extraction_method !== 'amazon-cart' && /^https:\/\/(?:www\.)?amazon\.com(?:\.au)?\/(?:dp|gp\/product)\/[a-z0-9]{10}\/?(?:\?.*)?$/i.test(product?.url || '') ? async () => setConfirmCartTracking(true) : undefined}
+            handleAmazonCartScan={product?.preferred_extraction_method !== 'amazon-cart' && isAmazonCartUrl(product?.url) ? async () => setConfirmCartTracking(true) : undefined}
             handleDelete={async () => state.setShowDeleteConfirm(true)}
             handleResumeMonitoring={state.handleResumeMonitoring}
             isRefreshing={state.isRefreshing}
