@@ -3,6 +3,7 @@ import {
   allowAmazonRequest,
   amazonTarget,
   hasHiddenCartPrice,
+  isAmazonCheckpointPage,
   readCartPrice,
   validateAmazonForm,
   type AmazonForm,
@@ -25,6 +26,22 @@ const form: AmazonForm = {
     ['condition', 'New'],
   ],
   conditions: ['New'],
+};
+const amazonOffersForm: AmazonForm = {
+  action: 'https://www.amazon.com/cart/add-to-cart/ref=aod_dpdsk_new_0',
+  method: 'post',
+  encoding: 'application/x-www-form-urlencoded',
+  fields: [
+    ['anti-csrftoken-a2z', 'csrf'],
+    ['items[0.base][asin]', 'B012345678'],
+    ['items[0.base][offerListingId]', 'offer-1'],
+    ['items[0.base][quantity]', '1'],
+    ['items[0.base][additionalParameters][listPurchaseAttribution][listAttributionId]', 'list-1'],
+    ['items[0.base][additionalParameters][listPurchaseAttribution][itemAttributionId]', 'item-1'],
+    ['clientName', 'OffersX_OfferDisplay_DetailPage'],
+  ],
+  conditions: ['New'],
+  seller: 'Amazon.com',
 };
 const row: CartRow = {
   asin: 'B012345678',
@@ -67,6 +84,7 @@ describe('isolated Amazon cart validation', () => {
   it('canonicalizes supported product URLs without retaining query parameters', () => {
     expect(target).toMatchObject({
       productUrl: 'https://www.amazon.com/dp/B012345678',
+      offersUrl: 'https://www.amazon.com/gp/product/ajax/aodAjaxMain/?asin=B012345678&pc=dp&experienceId=aodAjaxMain',
       asin: 'B012345678',
       currency: 'USD',
     });
@@ -131,6 +149,15 @@ describe('isolated Amazon cart validation', () => {
     expect(hasHiddenCartPrice('Add to cart')).toBe(false);
   });
 
+  it('recognizes Amazon validation checkpoints without attempting to bypass them', () => {
+    expect(isAmazonCheckpointPage(
+      '<form action="/errors_page/validateCaptcha"><button>Continue shopping</button></form>',
+      target.productUrl,
+    )).toBe(true);
+    expect(isAmazonCheckpointPage('', 'https://www.amazon.com/checkpoint/continue?token=redacted')).toBe(true);
+    expect(isAmazonCheckpointPage('<html><title>Product</title></html>', target.productUrl)).toBe(false);
+  });
+
   it('allows only a single new, identified offer and quantity', () => {
     expect(validateAmazonForm(form, target)).toMatchObject({ offerId: 'offer-1' });
     const invalid: AmazonForm[] = [
@@ -150,6 +177,26 @@ describe('isolated Amazon cart validation', () => {
       { ...form, fields: [...form.fields, ['ASIN_2', 'B012345679']] },
       { ...form, fields: [...form.fields, ['itemCount', '2']] },
       { ...form, fields: [...form.fields, ['exchangeID.1', 'exchange']] },
+    ];
+    for (const candidate of invalid) expect(validateAmazonForm(candidate, target)).toBeNull();
+  });
+
+  it('accepts only the Amazon-sold new offer form from the offers panel', () => {
+    expect(validateAmazonForm(amazonOffersForm, target)).toMatchObject({ offerId: 'offer-1' });
+    const invalid: AmazonForm[] = [
+      { ...amazonOffersForm, seller: 'Amazon Resale' },
+      { ...amazonOffersForm, seller: 'Third-party seller' },
+      { ...amazonOffersForm, conditions: ['Used - Like New'] },
+      { ...amazonOffersForm, action: 'https://www.amazon.com/cart/add-to-cart/ref=aod_dpdsk_used_0' },
+      { ...amazonOffersForm, action: 'https://www.amazon.com/checkout' },
+      { ...amazonOffersForm, fields: amazonOffersForm.fields.map(([name, value]) =>
+        [name, name.endsWith('[asin]') ? 'B012345679' : value]) },
+      { ...amazonOffersForm, fields: amazonOffersForm.fields.map(([name, value]) =>
+        [name, name.endsWith('[quantity]') ? '2' : value]) },
+      { ...amazonOffersForm, fields: [...amazonOffersForm.fields, ['items[1.base][asin]', 'B012345678']] },
+      { ...amazonOffersForm, fields: [...amazonOffersForm.fields, ['checkout', '1']] },
+      { ...amazonOffersForm, fields: [...amazonOffersForm.fields, ['items[0.base][quantity]', '1']] },
+      { ...amazonOffersForm, action: `${amazonOffersForm.action}?extra=1` },
     ];
     for (const candidate of invalid) expect(validateAmazonForm(candidate, target)).toBeNull();
   });
@@ -186,6 +233,47 @@ describe('isolated Amazon cart validation', () => {
     expect(allowAmazonRequest(request({
       url: 'https://www.amazon.com/gp/cart/view.html', method: 'GET', postData: undefined,
     }), guard())).toBe(false);
+  });
+
+  it('allows only the exact ASIN offers-page GET before the one verified offer POST', () => {
+    const state = {
+      target,
+      mainFrameId: 'main',
+      permit: validateAmazonForm(amazonOffersForm, target),
+      mutationSent: false,
+    };
+    const offersRequest: AmazonRequest = {
+      url: target.offersUrl,
+      method: 'GET',
+      resourceType: 'Document',
+      frameId: 'main',
+    };
+    expect(allowAmazonRequest(offersRequest, state)).toBe(true);
+    expect(allowAmazonRequest({
+      ...offersRequest,
+      url: 'https://www.amazon.com/errors_page/validateCaptcha?token=redacted',
+    }, state)).toBe(true);
+    for (const url of [
+      'https://www.amazon.com/gp/product/ajax/aodAjaxMain/?asin=B012345679&pc=dp&experienceId=aodAjaxMain',
+      `${target.offersUrl}&extra=1`,
+      `${target.offersUrl}&asin=B012345678`,
+      'https://www.amazon.com/gp/product/ajax/aodAjaxMain/?asin=B012345678&pc=dp',
+      'https://amazon.com.evil.example/errors_page/validateCaptcha?token=redacted',
+    ]) {
+      expect(allowAmazonRequest({ ...offersRequest, url }, state)).toBe(false);
+    }
+
+    const post: AmazonRequest = {
+      url: amazonOffersForm.action,
+      method: 'POST',
+      resourceType: 'Document',
+      frameId: 'main',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      postData: new URLSearchParams(amazonOffersForm.fields).toString(),
+    };
+    expect(allowAmazonRequest(post, state)).toBe(true);
+    expect(allowAmazonRequest(offersRequest, state)).toBe(false);
+    expect(allowAmazonRequest(post, state)).toBe(false);
   });
 
   it('requires the cart row to prove the same new offer, ASIN, quantity, and one unambiguous price', () => {

@@ -94,9 +94,10 @@ Select **Track the new-item Amazon cart price** when adding a product, or
 Amazon.com.au product URLs containing an ASIN, PriceStalker can try to read a
 price available in the cart. This
 experimental check requires the current browser scraper. It adds at most one
-new item to a temporary guest cart, without signing in or proceeding to
-checkout, and discards the cart afterward. The price is the guest item price,
-not a checkout total; account discounts, delivery, and taxes may differ.
+new item to an anonymous guest cart, without signing in or proceeding to
+checkout. Amazon may retain the item in its guest cart after the check. The
+price is the guest item price, not a checkout total; account discounts,
+delivery, and taxes may differ.
 
 The check only reports a price when it can verify the item, new condition,
 offer, quantity, and amount. If Amazon blocks the request or the page does not

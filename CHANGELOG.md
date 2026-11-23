@@ -19,11 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be selected in Admin when available to the token owner's account.
 - Experimental opt-in guest-cart checks for Amazon.com and Amazon.com.au listings that
   hide their new-item price until the item is added to a cart. Checks use an
-  isolated anonymous cart, never enter checkout, and report the price as
-  unavailable when the item, condition, offer, or amount cannot be verified.
-  Earlier page prices remain in history but are not compared with cart prices.
-  The current browser scraper is required; some layouts lack the evidence
-  needed to verify a price, and live Amazon compatibility is unverified.
+  isolated anonymous cart, select only a new offer sold by Amazon, never enter
+  checkout, and warn that Amazon may retain the item in its guest cart. Checks
+  report the price as unavailable when the item, condition, offer, or amount
+  cannot be verified. Amazon validation checkpoints are not bypassed. Earlier
+  page prices remain in history but are not compared with cart prices. The
+  current browser scraper is required.
 
 ### Fixed
 

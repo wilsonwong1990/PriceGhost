@@ -147,7 +147,7 @@ const OverviewSection: React.FC<OverviewSectionProps> = ({
             onClose={() => setConfirmCartTracking(false)}
             onConfirm={state.handleAmazonCartScan}
             title="Track Amazon cart price"
-            message="This changes future checks to the default new-item offer. Each check adds one item to a temporary guest cart; no order is placed. The default offer may change, and stock cannot be verified. To stop cart checks, stop tracking this listing."
+            message="This changes future checks to an Amazon-sold new-item offer. Each check adds one item to an anonymous guest cart; no order is placed, but Amazon may retain the item in that cart. The offer may change, and stock cannot be verified. To stop cart checks, stop tracking this listing."
             confirmText="Track Cart Price"
             isLoading={state.isRefreshing}
           />

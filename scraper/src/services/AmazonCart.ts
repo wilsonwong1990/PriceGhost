@@ -10,6 +10,7 @@ export interface AmazonTarget {
   marketplace: 'amazon.com' | 'amazon.com.au';
   origin: string;
   productUrl: string;
+  offersUrl: string;
   currency: 'USD' | 'AUD';
 }
 
@@ -29,6 +30,7 @@ export function amazonTarget(input: string): AmazonTarget | null {
       marketplace,
       origin,
       productUrl: `${origin}/dp/${asin}`,
+      offersUrl: `${origin}/gp/product/ajax/aodAjaxMain/?asin=${asin}&pc=dp&experienceId=aodAjaxMain`,
       currency: marketplace === 'amazon.com' ? 'USD' : 'AUD',
     };
   } catch {
@@ -48,6 +50,7 @@ export interface AmazonForm {
   encoding: string;
   fields: Field[];
   conditions: string[];
+  seller?: string | null;
 }
 
 export interface CartRow {
@@ -65,11 +68,36 @@ export interface AmazonPermit {
 }
 
 const ADD_PATHS = new Set(['/gp/add-to-cart/html', '/gp/aws/cart/add.html', '/gp/cart/add-to-cart.html']);
+const AMAZON_OFFERS_ADD_PATH = /^\/cart\/add-to-cart\/ref=aod_dpdsk_new_\d+$/;
 const AUXILIARY_FIELDS = new Set([
   'condition', 'itemcondition', 'condition.1', 'itemcondition.1',
   'merchantid', 'merchantid.1', 'session-id', 'anti-csrftoken-a2z',
   'csrf-token', 'submit.add-to-cart', 'submit.addtocart',
 ]);
+const AMAZON_OFFERS_FIELDS = new Set([
+  'anti-csrftoken-a2z',
+  'items[0.base][asin]',
+  'items[0.base][offerlistingid]',
+  'items[0.base][quantity]',
+  'items[0.base][additionalparameters][listpurchaseattribution][listattributionid]',
+  'items[0.base][additionalparameters][listpurchaseattribution][itemattributionid]',
+  'clientname',
+]);
+
+function isAmazonOffersUrl(url: URL, target: AmazonTarget): boolean {
+  const params = [...url.searchParams.entries()];
+  return url.origin === target.origin && !url.username && !url.password && !url.hash &&
+    url.pathname === '/gp/product/ajax/aodAjaxMain/' && params.length === 3 &&
+    url.searchParams.getAll('asin').length === 1 && url.searchParams.get('asin') === target.asin &&
+    url.searchParams.getAll('pc').length === 1 && url.searchParams.get('pc') === 'dp' &&
+    url.searchParams.getAll('experienceId').length === 1 &&
+    url.searchParams.get('experienceId') === 'aodAjaxMain';
+}
+
+function isAmazonCheckpointUrl(url: URL, target: AmazonTarget): boolean {
+  return url.origin === target.origin && !url.username && !url.password &&
+    /^\/(?:errors_page\/validateCaptcha|checkpoint\/continue)$/.test(url.pathname);
+}
 
 function isNewCondition(value: string): boolean {
   return /^(?:condition\s*:\s*)?new$/i.test(value.trim());
@@ -85,9 +113,18 @@ export function validateAmazonForm(form: AmazonForm | null, target: AmazonTarget
   } catch {
     return null;
   }
-  if (action.origin !== target.origin || action.username || action.password || action.search ||
-      action.hash || !ADD_PATHS.has(action.pathname)) return null;
+  if (action.origin !== target.origin || action.username || action.password ||
+      action.search || action.hash) return null;
+  const amazonOffersForm = AMAZON_OFFERS_ADD_PATH.test(action.pathname);
+  const expectedSeller = target.marketplace === 'amazon.com' ? 'Amazon.com' : 'Amazon.com.au';
+  if (amazonOffersForm ? form.seller?.trim() !== expectedSeller :
+      !ADD_PATHS.has(action.pathname)) return null;
   if (form.fields.length === 0 || form.fields.length > 100) return null;
+  if (amazonOffersForm) {
+    const names = form.fields.map(([name]) => name.toLowerCase());
+    if (new Set(names).size !== names.length ||
+        names.some(name => !AMAZON_OFFERS_FIELDS.has(name))) return null;
+  }
 
   const asins: string[] = [];
   const offers: string[] = [];
@@ -96,12 +133,17 @@ export function validateAmazonForm(form: AmazonForm | null, target: AmazonTarget
     if (name.length > 200 || value.length > 8192 ||
         /checkout|buy.?now|order|delete|remove|wishlist/i.test(name)) return null;
     if (/^(?:item)?condition(?:\.\d+)?$/i.test(name) && !isNewCondition(value)) return null;
-    const itemField = name.match(/^(asin|offeringid|offerlistingid|quantity|sellerid)(?:\.(\d+))?$/i);
+    const offersItemField = amazonOffersForm
+      ? name.match(/^items\[0\.base\]\[(asin|offerlistingid|quantity)\]$/i)
+      : null;
+    const itemField = offersItemField ||
+      name.match(/^(asin|offeringid|offerlistingid|quantity|sellerid)(?:\.(\d+))?$/i);
     if (!itemField) {
-      if (!AUXILIARY_FIELDS.has(name.toLowerCase())) return null;
+      if (amazonOffersForm ? !AMAZON_OFFERS_FIELDS.has(name.toLowerCase()) :
+          !AUXILIARY_FIELDS.has(name.toLowerCase())) return null;
       continue;
     }
-    if (itemField[2] && itemField[2] !== '1') return null;
+    if (!amazonOffersForm && itemField[2] && itemField[2] !== '1') return null;
     switch (itemField[1].toLowerCase()) {
       case 'asin': asins.push(value.toUpperCase()); break;
       case 'offeringid':
@@ -149,13 +191,18 @@ export function allowAmazonRequest(request: AmazonRequest, guard: AmazonGuard): 
   if (url.origin !== guard.target.origin || url.username || url.password ||
       request.resourceType !== 'Document' || request.frameId !== guard.mainFrameId) return false;
   if (request.method === 'GET') {
-    if (url.search) return false;
+    if (isAmazonCheckpointUrl(url, guard.target)) return true;
+    if (isAmazonOffersUrl(url, guard.target) && !guard.mutationSent) return true;
+    if (url.search || url.hash) return false;
     const productPath = new RegExp(`^/(?:dp|gp/product)/${guard.target.asin}/?$`, 'i');
     return productPath.test(url.pathname) ||
+      (guard.mutationSent && !!guard.permit && url.href === guard.permit.action) ||
       (guard.mutationSent && url.pathname === '/gp/cart/view.html');
   }
   if (request.method !== 'POST' || guard.mutationSent || !guard.permit ||
-      url.href !== guard.permit.action || !request.postData || request.postData.length > 65536) return false;
+      url.href !== guard.permit.action ||
+      !(ADD_PATHS.has(url.pathname) || AMAZON_OFFERS_ADD_PATH.test(url.pathname)) ||
+      !request.postData || request.postData.length > 65536) return false;
   const contentType = Object.entries(request.headers || {})
     .find(([name]) => name.toLowerCase() === 'content-type')?.[1];
   if (typeof contentType !== 'string' ||
@@ -197,6 +244,37 @@ function readProductMetadata(): { name: string | null; imageUrl: string | null }
   return { name, imageUrl };
 }
 
+export function isAmazonCheckpointPage(html: string, url: string): boolean {
+  return /\/(?:errors_page\/validateCaptcha|checkpoint\/continue)(?:[/?#]|$)/i.test(url) ||
+    /<form\b[^>]*(?:action|id)\s*=\s*["'][^"']*(?:validateCaptcha|captcha)/i.test(html);
+}
+
+function readAmazonOffers(): AmazonForm[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('#aod-pinned-offer, #aod-offer'))
+    .filter(offer => !offer.parentElement?.closest('#aod-pinned-offer, #aod-offer'))
+    .flatMap(offer => {
+      const form = offer.querySelector<HTMLFormElement>('form');
+      if (!form) return [];
+      const fields: Field[] = [];
+      for (const [name, value] of new FormData(form).entries()) {
+        if (typeof value !== 'string') return [];
+        fields.push([name, value]);
+      }
+      const condition = offer.querySelector('#aod-offer-heading')?.textContent?.replace(/\s+/g, ' ').trim() || '';
+      const seller = offer.querySelector(
+        '#aod-offer-soldBy .a-color-base, #aod-offer-soldBy a, .aod-offer-soldBy .a-color-base, .aod-offer-soldBy a'
+      )?.textContent?.replace(/\s+/g, ' ').trim() || null;
+      return [{
+        action: form.action,
+        method: form.method,
+        encoding: form.enctype,
+        fields,
+        conditions: condition ? [condition] : [],
+        seller,
+      }];
+    });
+}
+
 function safeProductMetadata(metadata: { name: string | null; imageUrl: string | null }) {
   const name = metadata.name && !/[\u0000-\u001f\u007f]/.test(metadata.name)
     ? metadata.name.slice(0, 255) : null;
@@ -216,53 +294,10 @@ function safeProductMetadata(metadata: { name: string | null; imageUrl: string |
   return { name, imageUrl };
 }
 
-function readProductForm(): AmazonForm | null {
-  const button = document.querySelector<HTMLInputElement | HTMLButtonElement>(
-    '#add-to-cart-button, input[name="submit.add-to-cart"], input[name="submit.addToCart"]'
-  );
-  const form = button?.form;
-  if (!button || !form || button.disabled) return null;
-  const fields: Field[] = [];
-  for (const [name, value] of new FormData(form, button).entries()) {
-    if (typeof value !== 'string') return null;
-    fields.push([name, value]);
-  }
-  const conditions = fields
-    .filter(([name]) => /^(?:item)?condition(?:\.1)?$/i.test(name))
-    .map(([, value]) => value);
-  const buyboxSelector = '#desktop_buybox, #buybox, #corePrice_feature_div, #apex_desktop, #newBuyBoxPrice';
-  const buyboxes: Element[] = [];
-  for (let element: Element | null = form; element; element = element.parentElement) {
-    if (element.matches(buyboxSelector)) buyboxes.push(element);
-  }
-  for (const element of [form, ...buyboxes]) {
-    const attribute = element.getAttribute('data-condition');
-    if (attribute != null) conditions.push(attribute);
-  }
-  const scope = buyboxes[buyboxes.length - 1] || form;
-  for (const element of scope.querySelectorAll('[data-condition], #condition, #buybox-condition, .condition')) {
-    const attribute = element.getAttribute('data-condition');
-    const text = element.textContent?.trim();
-    if (attribute !== null) conditions.push(attribute);
-    if (text) conditions.push(text);
-  }
-  return {
-    action: button.hasAttribute('formaction') ? button.formAction : form.action,
-    method: button.hasAttribute('formmethod') ? button.formMethod : form.method,
-    encoding: button.hasAttribute('formenctype') ? button.formEnctype : form.enctype,
-    fields,
-    conditions,
-  };
-}
-
-function submitProductForm(): void {
-  const button = document.querySelector<HTMLInputElement | HTMLButtonElement>(
-    '#add-to-cart-button, input[name="submit.add-to-cart"], input[name="submit.addToCart"]'
-  );
-  if (!button?.form) throw new Error('Add-to-cart form no longer available');
-  button.form.target = '_self';
-  button.formTarget = '_self';
-  button.form.requestSubmit(button);
+function submitAmazonOfferForm(action: string): void {
+  const forms = Array.from(document.forms).filter(form => form.action === action);
+  if (forms.length !== 1) throw new Error('Amazon offer form is no longer unique');
+  forms[0].requestSubmit();
 }
 
 function readCartRows(): CartRow[] {
@@ -270,7 +305,7 @@ function readCartRows(): CartRow[] {
     '#sc-active-cart [data-asin], #activeCartViewForm [data-asin]'
   )).filter(row => !row.parentElement?.closest('[data-asin]')).map(row => {
     const quantities = Array.from(row.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      'select[name^="quantity"], input[name^="quantity"]'
+      'select[name^="quantity"], input[name^="quantity"], input[name="items[0.base][quantity]"]'
     )).map(element => element.value);
     const storedQuantity = row.getAttribute('data-quantity');
     if (storedQuantity !== null) quantities.push(storedQuantity);
@@ -285,7 +320,7 @@ function readCartRows(): CartRow[] {
       row.getAttribute('data-offerlistingid'),
       row.getAttribute('data-encoded-offering'),
       ...Array.from(row.querySelectorAll<HTMLInputElement>(
-        'input[name^="offeringID"], input[name^="offerListingID"]'
+        'input[name^="offeringID"], input[name^="offerListingID"], input[name="items[0.base][offerListingId]"]'
       )).map(element => element.value),
     ].filter((value): value is string => !!value);
     const conditions: string[] = [];
@@ -365,7 +400,9 @@ export async function scrapeAmazonCart(
     if (guardFailed) throw new Error('Amazon request guard failed');
     if (signal?.aborted) return null;
     const html = await page.content();
-    const challenge = looksLikeChallenge(await page.title(), html, buildChallengePattern(options.challengePatterns));
+    const title = await page.title();
+    const challenge = isAmazonCheckpointPage(html, page.url()) ||
+      looksLikeChallenge(title, html, buildChallengePattern(options.challengePatterns));
     const base: ScrapeResult = {
       html: '',
       screenshotBase64: null,
@@ -390,11 +427,29 @@ export async function scrapeAmazonCart(
     if (!required) return { ...base, amazonCart: { required: false } };
     try {
       const metadata = safeProductMetadata(await page.evaluate(readProductMetadata));
-      guard.permit = validateAmazonForm(await page.evaluate(readProductForm), target);
+      const offersResponse = await page.goto(target.offersUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: remaining(),
+      });
+      if (signal?.aborted) return null;
+      if (guardFailed) throw new Error('Amazon request guard failed');
+      const offersHtml = await page.content();
+      const offersTitle = await page.title();
+      const offersChallenge = isAmazonCheckpointPage(offersHtml, page.url()) ||
+        looksLikeChallenge(offersTitle, offersHtml, buildChallengePattern(options.challengePatterns));
+      if (offersChallenge) {
+        return { ...base, challengeDetected: true, challengeUnresolved: true, amazonCart: unavailable };
+      }
+      if (offersResponse?.status() !== 200) return { ...base, amazonCart: unavailable };
+      const permits = (await page.evaluate(readAmazonOffers))
+        .map(form => validateAmazonForm(form, target))
+        .filter((permit): permit is AmazonPermit => permit !== null);
+      if (permits.length !== 1) return { ...base, amazonCart: unavailable };
+      guard.permit = permits[0];
       if (!guard.permit || remaining() <= 1) return { ...base, amazonCart: unavailable };
       const navigation = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: Math.min(8000, remaining()) })
         .catch(() => null);
-      await page.evaluate(submitProductForm);
+      await page.evaluate(submitAmazonOfferForm, guard.permit.action);
       await navigation;
       if (signal?.aborted) return null;
       if (!guard.mutationSent || guardFailed || remaining() <= 1) return { ...base, amazonCart: unavailable };

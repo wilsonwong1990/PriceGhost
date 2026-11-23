@@ -229,7 +229,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ onSubmit, availableTags }) =>
                 <input type="checkbox" checked={amazonCart} onChange={(e) => setAmazonCart(e.target.checked)} />
                 {' '}Track the new-item Amazon cart price
               </label>
-              <p className="text-muted">For plain Amazon.com or Amazon.com.au product URLs. Each check adds one new item to a temporary guest cart; no order is placed. The default offer may change.</p>
+              <p className="text-muted">For plain Amazon.com or Amazon.com.au product URLs. Each check adds one new item to an anonymous guest cart; no order is placed. Amazon may retain the item in that cart. The default offer may change.</p>
             </div>
 
             <div className="product-form-row">

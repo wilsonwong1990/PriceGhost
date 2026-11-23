@@ -58,7 +58,7 @@ const ProductActions: React.FC<ProductActionsProps> = ({
       </button>
       {handleAmazonCartScan && (
         <button className="btn btn-secondary" onClick={handleAmazonCartScan} disabled={isRefreshing}
-          title="Check the default new-item offer in a temporary guest cart; no order is placed">
+          title="Check an Amazon-sold new offer in a guest cart; Amazon may retain it. No order is placed">
           Track Amazon Cart Price
         </button>
       )}
