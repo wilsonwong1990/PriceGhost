@@ -196,6 +196,46 @@ describe('runAutoRetailerConfig Transaction Integration Unit Tests', () => {
     const { configCache } = await import('../../src/utils/cache');
     expect(configCache.invalidate).toHaveBeenCalledWith('example.com');
   });
+
+  it('does not penalize ordinary retailer selectors for a selectorless cart observation', async () => {
+    const { retailerRepository } = await import('../../src/models');
+    vi.mocked(retailerRepository.getByDomainForUpdate).mockResolvedValueOnce({
+      id: 1,
+      domain: 'example.com',
+      price_selectors: ['.old-price'],
+      selector_metadata: {
+        selectors: { '.old-price': { last_matched_at: '2026-01-01', match_count: 3, consecutive_failures: 2 } },
+      },
+    } as never);
+    await runAutoRetailerConfig({
+      url: 'https://example.com/product',
+      productId: 123,
+      scrapedData: {
+        name: null,
+        imageUrl: null,
+        url: 'https://example.com/product',
+        stockStatus: 'in_stock',
+        aiStatus: null,
+        price: { price: 99, currency: 'USD' },
+        priceCandidates: [],
+        needsReview: false,
+        amazonCartRequired: true,
+        selectedMethod: 'amazon-cart',
+      },
+      source: 'refresh',
+    });
+    expect(retailerRepository.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        price_selectors: ['.old-price'],
+        selector_metadata: expect.objectContaining({
+          selectors: expect.objectContaining({
+            '.old-price': expect.objectContaining({ consecutive_failures: 2 }),
+          }),
+        }),
+      }),
+      mockClient
+    );
+  });
 });
 
 describe('ProductPersistenceService saveScrapeResult Transactional Orchestration', () => {

@@ -44,6 +44,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-priceghost}
       # No default: a shared fallback secret would let anyone forge a session.
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      AMAZON_CART_SCRAPER_TOKEN: ${AMAZON_CART_SCRAPER_TOKEN:-}
       PORT: 3001
       NODE_ENV: production
       TZ: ${TZ:-UTC}
@@ -107,6 +108,7 @@ services:
     shm_size: 2gb
     environment:
       PORT: 5100
+      AMAZON_CART_SCRAPER_TOKEN: ${AMAZON_CART_SCRAPER_TOKEN:-}
       TZ: ${TZ:-UTC}
       MAX_BROWSERS: ${SCRAPER_MAX_BROWSERS:-3}
       MAX_PAGES_PER_BROWSER: ${SCRAPER_MAX_PAGES:-4}

@@ -16,6 +16,7 @@ import { runConsensusPhase } from './consensus';
 import { runVerificationPhase } from './verification';
 import { handleRetailerMaintenance, handleAutoMapping, handleRestoreStatus } from './maintenance';
 import { classifyTransportError } from '../../../types/availability';
+import { AMAZON_CART_METHOD } from '../acquisition/amazon';
 
 /**
  * High-level scraper entry point.
@@ -47,7 +48,8 @@ export async function scrapeProductWithVoting(
   skipAiVerification?: boolean,
   skipAiExtraction?: boolean,
   overrideConfig?: Partial<RetailerConfig>,
-  productId?: number
+  productId?: number,
+  options?: { allowAmazonCart?: boolean }
 ): Promise<ScrapedProductWithVoting> {
   const requestId = `REQ-${randomUUID()}`;
   const result: ScrapedProductWithVoting = { 
@@ -60,6 +62,9 @@ export async function scrapeProductWithVoting(
     priceCandidates: [], 
     needsReview: false 
   };
+  if (preferredMethod === AMAZON_CART_METHOD) {
+    result.amazonCartRequired = true;
+  }
   
   let html = '';
   let $: any = null;
@@ -82,12 +87,25 @@ export async function scrapeProductWithVoting(
       domainConfig: domainConfig || undefined,
       productId,
       requestId,
-      extractionSteps
+      extractionSteps,
+      requireAmazonCart: result.amazonCartRequired,
+      allowAmazonCart: options?.allowAmazonCart,
     });
 
     html = acqResult.html;
     $ = acqResult.$;
     let challenge = acqResult.challengeReason;
+    if (acqResult.amazonCart?.required) result.amazonCartRequired = true;
+
+    if (acqResult.cartStatusOnly) {
+      result.stockStatus = 'unknown';
+      result.needsReview = true;
+      result.failureReason = 'cart_price_unavailable';
+      result.unavailableReason = 'amazon_cart_price_unavailable';
+      extractionSteps.push('Amazon | Cart | New-item price could not be verified');
+      result.extractionSteps = extractionSteps;
+      return result;
+    }
 
     // Surface acquisition-learned flags on the result so the retailer config
     // is updated on save even when AI auto-mapping is disabled (issue #45).
@@ -111,7 +129,7 @@ export async function scrapeProductWithVoting(
     localeHint = extResults.localeHint;
 
     // --- Phase 3: Validation & Success-First Logic ---
-    if (result.priceCandidates && result.priceCandidates.length > 0 && challenge) {
+    if (result.priceCandidates && result.priceCandidates.length > 0 && challenge && !result.amazonCartRequired) {
       logger.info(`Scraper | Success-First | Ignoring ${challenge} because price data was found`, 'Scraper', { product_id: productId });
       extractionSteps.push(`Scraper | Success-First | Ignoring ${challenge}`);
       challenge = null;
@@ -149,7 +167,7 @@ export async function scrapeProductWithVoting(
     const priceExtracted = result.price !== null;
     let autoMapAttempted = false;
 
-    if (!challenge && !isDefinitivelyUnavailable && !priceExtracted && (!domainConfig || isShellConfig) && session.globalAiSettings.ai_auto_mapping_enabled) {
+    if (html && !challenge && !isDefinitivelyUnavailable && !priceExtracted && (!domainConfig || isShellConfig) && session.globalAiSettings.ai_auto_mapping_enabled) {
       autoMapAttempted = true;
       domainConfig = await handleAutoMapping({
         html,
@@ -198,19 +216,56 @@ export async function scrapeProductWithVoting(
       extractionSteps
     }, result);
 
+    if (result.amazonCartRequired) {
+      const observation = acqResult.amazonCart?.observation;
+      const unavailable = result.stockStatus === 'out_of_stock' || result.stockStatus === 'not_available';
+      result.memberPrice = null;
+      result.originalPrice = null;
+      result.aiStatus = null;
+      if (observation && !challenge && !unavailable) {
+        result.amazonCartObservation = observation;
+        result.name = acqResult.amazonCart?.metadata?.name || result.name;
+        result.imageUrl = acqResult.amazonCart?.metadata?.imageUrl || result.imageUrl;
+        result.stockStatus = 'unknown';
+        result.price = { price: observation.price, currency: observation.currency };
+        result.selectedMethod = AMAZON_CART_METHOD;
+        result.priceCandidates = [{
+          price: observation.price,
+          currency: observation.currency,
+          method: AMAZON_CART_METHOD,
+          context: 'New item price observed in an anonymous Amazon cart',
+          confidence: 1,
+        }];
+        result.needsReview = false;
+        result.reviewReason = undefined;
+        extractionSteps.push('Amazon | Cart | Verified new-item price in an isolated guest cart');
+      } else {
+        result.price = null;
+        result.stockStatus = 'unknown';
+        result.priceCandidates = [];
+        result.selectedMethod = undefined;
+        result.needsReview = true;
+        result.failureReason = 'cart_price_unavailable';
+        result.unavailableReason = 'amazon_cart_price_unavailable';
+        extractionSteps.push('Amazon | Cart | New-item price could not be verified');
+      }
+    }
+
     await handleRestoreStatus(result, domainConfig, !!overrideConfig, challenge, extractionSteps);
 
     // --- Phase 6: AI Verification ---
-    await runVerificationPhase({
-      url,
-      html,
-      userId,
-      productId,
-      finalSkipAiVerification: session.finalSkipAiVerification,
-      extractionSteps
-    }, result);
+    if (!result.amazonCartRequired) {
+      await runVerificationPhase({
+        url,
+        html,
+        userId,
+        productId,
+        finalSkipAiVerification: session.finalSkipAiVerification,
+        extractionSteps
+      }, result);
+    }
 
-    result.html = html;
+    result.html = result.amazonCartRequired ? undefined : html;
     result.extractionSteps = extractionSteps;
 
     const isOosOrPreOrderSuccess = !result.price && 
@@ -218,7 +273,7 @@ export async function scrapeProductWithVoting(
 
     // Record why, while the reasons are still in scope. Callers turn this into
     // something a user can act on instead of a flat "could not extract price".
-    if (!result.price && !isOosOrPreOrderSuccess) {
+    if (!result.price && !isOosOrPreOrderSuccess && !result.failureReason) {
       if (challenge) {
         result.failureReason = 'bot_challenge';
         result.failureDetail = challenge;

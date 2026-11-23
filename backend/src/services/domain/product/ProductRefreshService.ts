@@ -1,6 +1,5 @@
 import { 
   productRepository, 
-  priceHistoryRepository, 
   Product,
 } from '../../../models';
 import { scrapeProductWithVoting } from '../../scraper';
@@ -8,13 +7,10 @@ import { ExtractionMethod } from '../../../types/scraper';
 import { logger } from '../../../utils/system/logger';
 import { productNotificationService } from './notifications/index';
 import { productPersistenceService } from './ProductPersistenceService';
-import { isDefinitiveUnavailable, describeUnavailableReason } from '../../../types/availability';
+import { PAGE_GONE_THRESHOLD, isDefinitiveUnavailable, describeUnavailableReason } from '../../../types/availability';
 import { assertUrlIsSafe, UnsafeUrlError } from '../../../utils/system/url-safety';
 import { StockStatus } from '../../../models/types/base';
-
-// Consecutive page-gone scrapes required before a product is marked
-// not_available, monitoring is paused, and the user is notified.
-const PAGE_GONE_THRESHOLD = 3;
+import { AMAZON_CART_METHOD, isAmazonMarketplaceUrl } from '../../scraper/acquisition/amazon';
 
 /**
  * Consecutive transport failures before the user is told the retailer looks
@@ -61,9 +57,6 @@ export class ProductRefreshService {
     const skipAiVerification = await productRepository.isAiVerificationDisabled(productId);
     const skipAiExtraction = await productRepository.isAiExtractionDisabled(productId);
 
-    // 0. Capture state before refresh
-    const preScrapePrice = await priceHistoryRepository.getLatest(productId, 'standard');
-
     // A stored URL is not a trusted URL: rows added before the guard existed
     // were never checked, and a hostname that was public when the product was
     // added can be repointed at an internal address afterwards -- which on
@@ -90,7 +83,8 @@ export class ProductRefreshService {
       skipAiVerification,
       skipAiExtraction,
       undefined,
-      productId
+      productId,
+      { allowAmazonCart: true }
     );
 
     // 1.5 Separate two things that used to be conflated.
@@ -107,8 +101,10 @@ export class ProductRefreshService {
     const reason = scrapedData.unavailableReason;
     const isDefinitive = isDefinitiveUnavailable(reason);
     const isTransient = !!reason && !isDefinitive;
+    const amazonRefresh = isAmazonMarketplaceUrl(product.url) ||
+      preferredMethod === AMAZON_CART_METHOD || scrapedData.amazonCartRequired === true;
 
-    if (isTransient) {
+    if (isTransient && !amazonRefresh) {
       const failures = await productRepository.recordFailure(productId, reason!);
       logger.warn(
         `Product ${productId} | Availability | ${describeUnavailableReason(reason)} (failure ${failures}). Status unchanged.`,
@@ -119,7 +115,7 @@ export class ProductRefreshService {
         // Once, on crossing the threshold -- not every scrape thereafter.
         await productNotificationService.notifyNotAvailable(product, reason!, false, failures);
       }
-    } else if (isDefinitive && product.stock_status !== 'not_available') {
+    } else if (isDefinitive && !amazonRefresh && product.stock_status !== 'not_available') {
       const streak = (product.page_gone_streak || 0) + 1;
       await productRepository.setPageGoneStreak(productId, streak);
       await productRepository.setUnavailableReason(productId, reason!);
@@ -127,7 +123,7 @@ export class ProductRefreshService {
         logger.warn(`Product ${productId} | Status | ${describeUnavailableReason(reason)} (${streak}/${PAGE_GONE_THRESHOLD} consecutive). Keeping status '${product.stock_status}' until the streak completes.`, 'Products', { product_id: productId });
         scrapedData.stockStatus = product.stock_status;
       }
-    } else if (!reason) {
+    } else if (!reason && !amazonRefresh) {
       // The page was actually read, so any previous failure state is stale.
       if (product.page_gone_streak) await productRepository.setPageGoneStreak(productId, 0);
       await productRepository.clearFailureState(productId);
@@ -140,15 +136,30 @@ export class ProductRefreshService {
     // and outside any lock, so two concurrent refreshes of the same product
     // both saw `out_of_stock` and both sent a back-in-stock alert for one
     // event. Only the refresh that actually wrote the change sees it here.
-    const transition = await productPersistenceService.saveScrapeResult(productId, userId, scrapedData, 'refresh');
+    const transitions = await productPersistenceService.saveScrapeResult(productId, userId, scrapedData, 'refresh');
+    if (transitions?.ignored) {
+      return { stockStatus: 'unknown', aiStatus: null, status: 'superseded' };
+    }
+    if (isTransient && amazonRefresh && transitions?.failureStreak !== undefined) {
+      const failures = transitions.failureStreak;
+      logger.warn(
+        `Product ${productId} | Availability | ${describeUnavailableReason(reason)} (failure ${failures}). Status unchanged.`,
+        'Products',
+        { product_id: productId }
+      );
+      if (failures === SITE_FAILURE_NOTIFY_THRESHOLD) {
+        await productNotificationService.notifyNotAvailable(product, reason!, false, failures);
+      }
+    }
+    const transition = transitions?.stock;
 
     // Resume only a pause the system applied. A user who deliberately paused a
     // product does not want it silently resumed because the page came back --
     // that decision is theirs, and previously it was overridden.
-    if (product.checking_paused && product.auto_paused && scrapedData.stockStatus !== 'not_available') {
+    if (product.checking_paused && product.auto_paused && !reason && scrapedData.stockStatus !== 'not_available') {
       logger.info(`Product ${productId} | Status | Page is available again. Resuming checks.`, 'Products', { product_id: productId });
       await productRepository.setPaused(productId, false, false);
-      await productRepository.setUnavailableReason(productId, null);
+      if (!amazonRefresh) await productRepository.setUnavailableReason(productId, null);
       product.checking_paused = false;
       // Close the loop. Without this the lifecycle only ever reports bad news:
       // the user was told monitoring stopped and never told it started again.
@@ -160,35 +171,44 @@ export class ProductRefreshService {
       if (transition.to === 'not_available') {
         logger.warn(`Product ${productId} | Status | ${describeUnavailableReason(reason)}. Pausing further checks.`, 'Products', { product_id: productId });
         await productRepository.setPaused(productId, true, false);
-        await productNotificationService.notifyNotAvailable(product, reason, true, (product.page_gone_streak || 0) + 1);
+        await productNotificationService.notifyNotAvailable(
+          product, reason, true, transitions?.pageGoneStreak ?? (product.page_gone_streak || 0) + 1
+        );
       } else if (transition.to === 'in_stock' && isBackInStockFrom(transition.from) && product.notify_back_in_stock) {
-        await productNotificationService.notifyBackInStock(product, scrapedData, transition.from);
+        const priceUnverified = scrapedData.needsReview || (scrapedData.amazonCartRequired && !scrapedData.amazonCartObservation);
+        await productNotificationService.notifyBackInStock(
+          product, priceUnverified ? { ...scrapedData, price: null } : scrapedData, transition.from
+        );
       }
     }
 
-    if (scrapedData.price) {
+    if (transitions?.price) {
+      const { previousPrice, currentPrice } = transitions.price;
       // Check if this was a pre-order product with no prior recorded price
-      const isPreOrderNoPrice = product.stock_status === 'pre_order' && (!preScrapePrice || !preScrapePrice.price);
+      const isPreOrderNoPrice = !scrapedData.amazonCartRequired &&
+        product.stock_status === 'pre_order' && !transitions.price.hadPreviousPrice;
       if (isPreOrderNoPrice) {
-        await productNotificationService.notifyPriceAnnounced(product, scrapedData.price);
+        await productNotificationService.notifyPriceAnnounced(product, currentPrice);
       }
 
-      if (!preScrapePrice || preScrapePrice.price !== scrapedData.price.price) {
-        if (preScrapePrice && product.price_drop_threshold) {
-          await productNotificationService.notifyPriceDrop(product, preScrapePrice.price, scrapedData.price);
-        }
-        if (product.target_price) {
-          await productNotificationService.notifyTargetHit(product, preScrapePrice?.price || null, scrapedData.price);
-        }
-        
-        let statusLabel = scrapedData.aiStatus === 'confirmed' ? ' (System confirmed)' : (scrapedData.aiStatus ? ` (AI: ${scrapedData.aiStatus})` : '');
-        logger.info(`Product ${productId} | Price | Updated to ${scrapedData.price.currency} ${scrapedData.price.price}${statusLabel}`, 'Products', { product_id: productId });
+      if (previousPrice !== null && product.price_drop_threshold) {
+        await productNotificationService.notifyPriceDrop(product, previousPrice, currentPrice);
       }
+      if (product.target_price) {
+        await productNotificationService.notifyTargetHit(product, previousPrice, currentPrice);
+      }
+      const statusLabel = scrapedData.aiStatus === 'confirmed' ? ' (System confirmed)' : (scrapedData.aiStatus ? ` (AI: ${scrapedData.aiStatus})` : '');
+      logger.info(`Product ${productId} | Price | Updated to ${currentPrice.currency} ${currentPrice.price}${statusLabel}`, 'Products', { product_id: productId });
     }
 
+    const cartVerified = !!scrapedData.amazonCartObservation && !scrapedData.needsReview &&
+      scrapedData.price?.price === scrapedData.amazonCartObservation.price &&
+      scrapedData.price?.currency === scrapedData.amazonCartObservation.currency;
     return {
-      stockStatus: scrapedData.stockStatus,
+      stockStatus: scrapedData.amazonCartRequired ? 'unknown' : scrapedData.stockStatus,
       aiStatus: scrapedData.aiStatus,
+      status: scrapedData.amazonCartRequired && !cartVerified
+        ? 'unavailable' : 'ok',
     };
   }
 }

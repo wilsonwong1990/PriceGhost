@@ -15,6 +15,7 @@ export interface FallbackOptions {
   productId?: number;
   extractionSteps: string[];
   challengeReason: string;
+  onFinalUrl?: (url: string) => void;
   /** The retailer's User-Agent override, if it has one. */
   userAgent?: string | null;
 }
@@ -58,7 +59,7 @@ export async function handleAcquisitionFallback(options: FallbackOptions): Promi
       const defaultReferrer = await settingsCache.getDefaultReferrer();
       remoteOptions.referrer = defaultReferrer || undefined;
 
-      html = await fetchRemoteHtml(url, rsUrl, remoteOptions);
+      html = await fetchRemoteHtml(url, rsUrl, remoteOptions, options.onFinalUrl);
       logger.info(`Scraper | Fallback | Remote success for ${domain}`, 'Scraper', { product_id: productId });
       extractionSteps.push(`Scraper | Fallback | Remote Success`);
       $ = load(html);

@@ -11,6 +11,9 @@ import { PoolClient } from 'pg';
 import { configCache, regionalMappingCache } from '../../../utils/cache';
 import { Product } from '../../../models/types';
 import { StockStatus } from '../../../models/types/base';
+import { PAGE_GONE_THRESHOLD, isDefinitiveUnavailable } from '../../../types/availability';
+import { AMAZON_CART_BASIS, AMAZON_CART_METHOD, isAmazonMarketplaceUrl } from '../../scraper/acquisition/amazon';
+import { itemRepository } from './repositories/item.repository';
 
 /** A stock change that was actually written, as observed under the lock. */
 export interface StockTransition {
@@ -18,17 +21,53 @@ export interface StockTransition {
   to: StockStatus;
 }
 
+export interface PriceTransition {
+  previousPrice: number | null;
+  hadPreviousPrice: boolean;
+  currentPrice: { price: number; currency: string };
+}
+
+export interface PersistenceTransitions {
+  stock: StockTransition | null;
+  price: PriceTransition | null;
+  failureStreak?: number;
+  pageGoneStreak?: number;
+  ignored?: boolean;
+}
+
+function hasVerifiedCart(scraped: ScrapedProductWithVoting, source: string): boolean {
+  const observation = source === 'manual-confirm' ? undefined : scraped.amazonCartObservation;
+  return !!observation && scraped.amazonCartRequired === true && !scraped.needsReview &&
+    scraped.price?.price === observation.price && scraped.price.currency === observation.currency;
+}
+
 export class ProductPersistenceService {
+  async rememberAmazonCartRequirement(productId: number, userId: number, unavailableReason?: string): Promise<void> {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [productId]);
+      const product = await productRepository.findById(productId, userId, { executor: client });
+      if (!product) throw new Error('Product not found');
+      if (product.preferred_extraction_method !== AMAZON_CART_METHOD || unavailableReason) {
+        await productRepository.markAmazonCartRequired(productId, unavailableReason, client);
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      logger.error(`Product ${productId} | Failed to remember Amazon cart requirement`, 'Products', { product_id: productId, error });
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   /**
    * Saves metadata, price history, and stock history for a product.
    * Handles Standard, Member, and Original prices.
    *
-   * Returns the stock transition it actually applied, or null if the status did
-   * not change. Callers must decide whether to notify from this rather than
-   * from their own pre-scrape snapshot: the snapshot is read outside the
-   * advisory lock, so two concurrent refreshes both saw the old status and both
-   * fired a back-in-stock alert for the same event (issue #92). The transition
-   * returned here is observed under the lock, so exactly one of them sees it.
+   * Returns the price and stock transitions actually written under the product
+   * lock, so concurrent refreshes cannot notify twice from stale snapshots.
    */
   async saveScrapeResult(
     productId: number, 
@@ -36,7 +75,7 @@ export class ProductPersistenceService {
     scrapedData: ScrapedProductWithVoting,
     source: 'manual-add' | 'refresh' | 'manual-confirm' | 'auto-track',
     manualSelector?: string
-  ): Promise<StockTransition | null> {
+  ): Promise<PersistenceTransitions | null> {
     const client = await pool.connect();
     
     try {
@@ -53,6 +92,33 @@ export class ProductPersistenceService {
         return null;
       }
 
+      const amazonRefresh = source === 'refresh' && (
+        isAmazonMarketplaceUrl(product.url) || product.preferred_extraction_method === AMAZON_CART_METHOD ||
+        scrapedData.amazonCartRequired === true
+      );
+      if (product.preferred_extraction_method === AMAZON_CART_METHOD && !scrapedData.amazonCartRequired) {
+        await client.query('ROLLBACK');
+        logger.info(`Product ${productId} | Ignored a stale pre-cart scrape`, 'Products', { product_id: productId });
+        return { stock: null, price: null, ignored: true };
+      }
+
+      let failureStreak: number | undefined;
+      let pageGoneStreak: number | undefined;
+      if (amazonRefresh) {
+        const reason = scrapedData.unavailableReason;
+        if (reason && !isDefinitiveUnavailable(reason)) {
+          failureStreak = await productRepository.recordFailure(productId, reason, client);
+        } else if (reason && product.stock_status !== 'not_available') {
+          pageGoneStreak = (product.page_gone_streak || 0) + 1;
+          await productRepository.setPageGoneStreak(productId, pageGoneStreak, client);
+          await productRepository.setUnavailableReason(productId, reason, client);
+          if (pageGoneStreak < PAGE_GONE_THRESHOLD) scrapedData.stockStatus = product.stock_status;
+        } else if (!reason) {
+          if (product.page_gone_streak) await productRepository.setPageGoneStreak(productId, 0, client);
+          await productRepository.clearFailureState(productId, client);
+        }
+      }
+
       // Resolve domain early — needed for cache invalidation post-commit
       const configDomain = await regionalMappingCache.getLookupDomain(product.url);
 
@@ -60,10 +126,29 @@ export class ProductPersistenceService {
       await this.updateMetadata(client, productId, userId, product, scrapedData, source);
 
       // 3. Update stock status and history
-      const transition = await this.updateStockState(client, productId, product, scrapedData);
+      const verifiedCart = hasVerifiedCart(scrapedData, source);
+      if (verifiedCart && product.stock_status === 'not_available') {
+        scrapedData.stockStatus = 'unknown';
+      }
+      const mayUpdateStock = !scrapedData.amazonCartRequired ||
+        isDefinitiveUnavailable(scrapedData.unavailableReason) ||
+        (verifiedCart && product.stock_status === 'not_available');
+      const transition = mayUpdateStock
+        ? await this.updateStockState(client, productId, product, scrapedData, verifiedCart && product.stock_status === 'not_available')
+        : null;
 
       // 4. Record Prices
-      await this.recordPrices(client, productId, scrapedData, source);
+      const priceTransition = await this.recordPrices(client, productId, scrapedData, source);
+
+      if (scrapedData.amazonCartRequired) {
+        if (verifiedCart) {
+          await productRepository.updateExtractionMethod(productId, AMAZON_CART_METHOD, client);
+        } else {
+          await productRepository.markAmazonCartRequired(
+            productId, source === 'refresh' ? scrapedData.unavailableReason : undefined, client
+          );
+        }
+      }
 
       // 5. Sync Categories
       if (product.category) {
@@ -88,6 +173,9 @@ export class ProductPersistenceService {
       if (source === 'refresh' && scrapedData.needsReview) {
         await productRepository.update(productId, userId, { needs_price_review: true }, client);
       }
+      if (source === 'manual-confirm' && !scrapedData.amazonCartRequired) {
+        await productRepository.update(productId, userId, { needs_price_review: false, ai_status: 'confirmed' }, client);
+      }
 
       await client.query('COMMIT');
 
@@ -95,7 +183,7 @@ export class ProductPersistenceService {
       // immediately picks up any selector changes confirmed by this save operation.
       configCache.invalidate(configDomain);
 
-      return transition;
+      return { stock: transition, price: priceTransition, failureStreak, pageGoneStreak };
     } catch (error) {
       await client.query('ROLLBACK');
       logger.error(`Product ${productId} | Persistence | Failed: ${error}`, 'Products', { product_id: productId, error });
@@ -115,7 +203,7 @@ export class ProductPersistenceService {
     product: Product,
     scrapedData: ScrapedProductWithVoting,
     source: string
-  ) {
+  ): Promise<void> {
     const metadataUpdates: any = {};
 
     const sanitizedName = sanitizeProductName(scrapedData.name);
@@ -134,6 +222,9 @@ export class ProductPersistenceService {
       await productRepository.update(productId, userId, metadataUpdates, client);
       logger.debug(`Product ${productId} | Metadata Updated | ${source}`, 'Products');
     }
+    if (hasVerifiedCart(scrapedData, source) && (sanitizedName || sanitizedImage)) {
+      await itemRepository.updateFallbackMetadata(productId, userId, sanitizedName, sanitizedImage, client);
+    }
   }
 
   /**
@@ -143,12 +234,13 @@ export class ProductPersistenceService {
     client: PoolClient,
     productId: number,
     product: Product,
-    scrapedData: ScrapedProductWithVoting
+    scrapedData: ScrapedProductWithVoting,
+    allowUnknown = false,
   ): Promise<StockTransition | null> {
     // 'unknown' means the scrape could not determine anything (blocked page,
     // failed extraction) — it is not an observation, so never let it
     // overwrite a real previously-known status.
-    if (scrapedData.stockStatus === 'unknown' && product.stock_status && product.stock_status !== 'unknown') {
+    if (!allowUnknown && scrapedData.stockStatus === 'unknown' && product.stock_status && product.stock_status !== 'unknown') {
       logger.debug(`Product ${productId} | Stock | Scrape returned unknown; keeping '${product.stock_status}'`, 'Products', { product_id: productId });
       return null;
     }
@@ -176,15 +268,20 @@ export class ProductPersistenceService {
     productId: number,
     scrapedData: ScrapedProductWithVoting,
     source: string
-  ) {
+  ): Promise<PriceTransition | null> {
     // A price that still needs a human decision is not authoritative yet.
     // Recording it makes it the current price and the anchor, so a wrong
     // extraction becomes the product's price before anyone has confirmed it.
     // A manual confirmation is the act of reviewing, so it always records.
     const awaitingReview = scrapedData.needsReview === true && source !== 'manual-confirm';
+    const observation = source === 'manual-confirm' ? undefined : scrapedData.amazonCartObservation;
+    const verifiedCart = hasVerifiedCart(scrapedData, source);
+    let transition: PriceTransition | null = null;
 
     // A. Standard Price
-    if (scrapedData.price && !scrapedData.price.currency) {
+    if (scrapedData.amazonCartRequired && !verifiedCart) {
+      logger.info(`Product ${productId} | Price | Skipped unverified Amazon cart price (${source})`, 'Products', { product_id: productId });
+    } else if (scrapedData.price && !scrapedData.price.currency) {
       // A price without a resolved currency must never enter history, but the
       // skip has to be loud: arbitration flags it for review, and this log is
       // the trace for why the history did not advance.
@@ -193,16 +290,24 @@ export class ProductPersistenceService {
       logger.info(`Product ${productId} | Price | Skipped recording ${scrapedData.price.currency} ${scrapedData.price.price}: awaiting review (${source})`, 'Products', { product_id: productId });
     } else if (scrapedData.price?.currency) {
       const latestStandardPrice = await priceHistoryRepository.getLatest(productId, 'standard', client);
+      const details = verifiedCart && observation ? {
+        price_basis: AMAZON_CART_BASIS,
+        asin: observation.asin,
+        marketplace: observation.marketplace,
+        condition: observation.condition,
+      } : null;
+      const previousCartBasis = latestStandardPrice?.details?.price_basis === AMAZON_CART_BASIS;
+      const sameBasis = previousCartBasis === verifiedCart;
       // A manual confirmation always records, even at an unchanged price: the
       // user explicitly verified it, and the fresh row is what repopulates a
       // stale product's history and anchor (issue #55).
-      if (source === 'manual-confirm' || this.hasChanged(latestStandardPrice, scrapedData.price)) {
+      if (source === 'manual-confirm' || !sameBasis || this.hasChanged(latestStandardPrice, scrapedData.price)) {
         await priceHistoryRepository.create(
           productId,
           scrapedData.price.price,
           scrapedData.price.currency,
           scrapedData.aiStatus,
-          null,
+          details,
           'standard',
           client
         );
@@ -213,17 +318,29 @@ export class ProductPersistenceService {
         await productRepository.updateAnchorPrice(productId, scrapedData.price.price, client);
 
         // Record extraction method if we're moving to a stable one
-        if (scrapedData.selectedMethod) {
+        if (scrapedData.selectedMethod && !scrapedData.amazonCartRequired) {
           await productRepository.updateExtractionMethod(productId, scrapedData.selectedMethod, client);
         }
+        const previousPrice = latestStandardPrice && sameBasis &&
+          latestStandardPrice.currency === scrapedData.price.currency
+          ? Number(latestStandardPrice.price)
+          : null;
+        transition = {
+          previousPrice: previousPrice !== null && Number.isFinite(previousPrice) ? previousPrice : null,
+          hadPreviousPrice: !!latestStandardPrice,
+          currentPrice: { price: scrapedData.price.price, currency: scrapedData.price.currency },
+        };
       }
     }
+
+    if (scrapedData.amazonCartRequired) return transition;
 
     // B. Member Price
     await this.recordSecondaryPrice(client, productId, scrapedData, source, 'member-price', scrapedData.memberPrice, awaitingReview);
 
     // C. Original Price
     await this.recordSecondaryPrice(client, productId, scrapedData, source, 'original-price', scrapedData.originalPrice, awaitingReview);
+    return transition;
   }
 
   /**

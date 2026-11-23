@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from '@tanstack/react-router';
 import { ItemWithListings } from '../../../../types/api';
 import { formatPrice } from '../../../../utils/format';
+import { isAmazonCartStockUnverified, stockStatusForDisplay } from '../../../../utils/availability';
 import Icon from '../../../../components/Icon';
 import './ItemCard.css';
 
@@ -19,6 +20,9 @@ interface ItemCardProps {
  * not be compared.
  */
 const ItemCard: React.FC<ItemCardProps> = ({ item, userLocale }) => {
+  const inStock = item.listings.some(listing => stockStatusForDisplay(listing) === 'in_stock');
+  const stockUnverified = !inStock && item.listings.some(isAmazonCartStockUnverified);
+
   return (
     <div className="item-card">
       <div className="item-card-head">
@@ -31,8 +35,8 @@ const ItemCard: React.FC<ItemCardProps> = ({ item, userLocale }) => {
         <div className="item-card-heading">
           <div className="item-card-name" title={item.name}>{item.name}</div>
           <div className="item-card-meta">
-            <span className={`item-card-stock ${item.any_in_stock ? 'in' : 'out'}`}>
-              {item.any_in_stock ? 'In stock' : 'Not in stock'}
+            <span className={`item-card-stock ${inStock ? 'in' : 'out'}`}>
+              {inStock ? 'In stock' : stockUnverified ? 'Stock unverified' : 'Not in stock'}
             </span>
             <span className="item-card-stores">
               {item.store_count === 1 ? '1 store' : `${item.store_count} stores`}

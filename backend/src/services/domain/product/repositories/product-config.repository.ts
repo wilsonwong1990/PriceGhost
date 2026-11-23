@@ -12,8 +12,8 @@ export const productConfigRepository = {
    * a retailer having a bad afternoon eventually mark products as gone, which is
    * the opposite of what the evidence supports.
    */
-  recordFailure: async (id: number, reason: string): Promise<number> => {
-    const result = await pool.query(
+  recordFailure: async (id: number, reason: string, executor?: Executor): Promise<number> => {
+    const result = await asExecutor(executor).query(
       `UPDATE products
           SET failure_streak = failure_streak + 1,
               last_failure_at = CURRENT_TIMESTAMP,
@@ -26,8 +26,8 @@ export const productConfigRepository = {
   },
 
   /** Clears failure state after a scrape that actually reached the page. */
-  clearFailureState: async (id: number): Promise<void> => {
-    await pool.query(
+  clearFailureState: async (id: number, executor?: Executor): Promise<void> => {
+    await asExecutor(executor).query(
       `UPDATE products
           SET failure_streak = 0,
               unavailable_reason = NULL
@@ -38,8 +38,8 @@ export const productConfigRepository = {
   },
 
   /** Records why a product is unavailable, without touching failure counters. */
-  setUnavailableReason: async (id: number, reason: string | null): Promise<void> => {
-    await pool.query('UPDATE products SET unavailable_reason = $2 WHERE id = $1', [id, reason]);
+  setUnavailableReason: async (id: number, reason: string | null, executor?: Executor): Promise<void> => {
+    await asExecutor(executor).query('UPDATE products SET unavailable_reason = $2 WHERE id = $1', [id, reason]);
   },
 
   /**
@@ -57,8 +57,8 @@ export const productConfigRepository = {
     );
   },
 
-  setPageGoneStreak: async (id: number, streak: number): Promise<void> => {
-    await pool.query(
+  setPageGoneStreak: async (id: number, streak: number, executor?: Executor): Promise<void> => {
+    await asExecutor(executor).query(
       'UPDATE products SET page_gone_streak = $2 WHERE id = $1',
       [id, streak]
     );
@@ -95,6 +95,14 @@ export const productConfigRepository = {
     await asExecutor(executor).query(
       'UPDATE products SET preferred_extraction_method = $1, needs_price_review = false WHERE id = $2',
       [method, id]
+    );
+  },
+
+  markAmazonCartRequired: async (id: number, reason: string | undefined, executor?: Executor): Promise<void> => {
+    await asExecutor(executor).query(
+      `UPDATE products SET preferred_extraction_method = 'amazon-cart', needs_price_review = true,
+                           unavailable_reason = $2 WHERE id = $1`,
+      [id, reason || 'amazon_cart_price_unavailable']
     );
   },
 

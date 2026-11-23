@@ -4,13 +4,26 @@ import { productDiscoveryService } from './discovery';
 import { productConfirmationService } from './confirmation';
 import { productRescanService } from './rescan';
 import { defaultCheckIntervalService } from '../DefaultCheckIntervalService';
+import { AMAZON_CART_METHOD, amazonTarget } from '../../../scraper/acquisition/amazon';
 
 export class ProductAddService {
   /**
    * Main entry point for adding a product.
    */
   async addProduct(userId: number, url: string, options: any): Promise<any> {
-    const cleanedUrl = cleanUrl(url);
+    const wantsCart = options.amazonCart === true || options.selectedMethod === AMAZON_CART_METHOD;
+    const target = wantsCart ? amazonTarget(url.trim()) : null;
+    if (wantsCart && !target) {
+      const error: Error & { statusCode?: number } = new Error('Amazon cart pricing requires a plain Amazon.com or Amazon.com.au product URL without an offer or variant selection');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (options.amazonCart === true && options.selectedPrice !== undefined && options.selectedMethod !== AMAZON_CART_METHOD) {
+      const error: Error & { statusCode?: number } = new Error('Amazon cart pricing requires a verified cart selection');
+      error.statusCode = 400;
+      throw error;
+    }
+    const cleanedUrl = target?.productUrl || cleanUrl(url);
     
     // Check for duplicate
     const existingId = await productRepository.findDuplicateUrl(cleanedUrl, userId);
@@ -37,11 +50,11 @@ export class ProductAddService {
       });
     } 
     
-    return productDiscoveryService.initiateProductDiscovery(userId, cleanedUrl, category, refreshInterval);
+    return productDiscoveryService.initiateProductDiscovery(userId, cleanedUrl, category, refreshInterval, wantsCart);
   }
 
-  async scanProduct(userId: number, productId: number): Promise<any> {
-    return productRescanService.scanProduct(userId, productId);
+  async scanProduct(userId: number, productId: number, amazonCart = false): Promise<any> {
+    return productRescanService.scanProduct(userId, productId, amazonCart);
   }
 
   async confirmProductSelection(userId: number, productId: number, selection: any) {

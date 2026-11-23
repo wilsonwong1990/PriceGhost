@@ -5,6 +5,7 @@ import { SCOPE_MCP_READ, SCOPE_MCP_WRITE } from '../../services/domain/token/sco
 import { productHistoryService, productRefreshService } from '../../services/domain/product';
 import { logger } from '../../utils/system/logger';
 import { asyncHandler, callerIsAdmin } from '../../utils/system/route-helpers';
+import { productResponse } from '../products/product-response';
 
 const router = Router();
 
@@ -28,7 +29,7 @@ router.get('/:productId/history', asyncHandler(async (req: AuthRequest, res: Res
   const days = req.query.days ? parseInt(req.query.days as string, 10) : undefined;
   const result = await productHistoryService.getPriceHistory(productId, userId, days, await callerIsAdmin(req));
 
-  res.json(result);
+  res.json({ ...result, product: productResponse(result.product) });
 }, 'Prices | Fetch History', 'Prices', 'Failed to fetch price history'));
 
 // Force immediate price refresh
@@ -49,6 +50,14 @@ router.post('/:productId/refresh', asyncHandler(async (req: AuthRequest, res: Re
   }
 
   const result = await productRefreshService.refreshProduct(product);
+  if (result.status === 'superseded') {
+    res.status(409).json({ ...result, error: 'The refresh was superseded by a cart-price opt-in. Refresh again.' });
+    return;
+  }
+  if (result.status === 'unavailable') {
+    res.status(503).json({ ...result, error: 'Amazon cart price could not be verified.' });
+    return;
+  }
 
   res.json({
     message: result.stockStatus === 'out_of_stock'

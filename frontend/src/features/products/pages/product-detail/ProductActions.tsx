@@ -12,6 +12,7 @@ interface ProductActionsProps {
   onSeparate?: () => void;
   handleRefresh: () => Promise<void>;
   handleRescan: () => Promise<void>;
+  handleAmazonCartScan?: () => Promise<void>;
   handleDelete: () => Promise<void>;
   handleResumeMonitoring: () => Promise<void>;
   isRefreshing: boolean;
@@ -24,6 +25,7 @@ const ProductActions: React.FC<ProductActionsProps> = ({
   onSeparate,
   handleRefresh,
   handleRescan,
+  handleAmazonCartScan,
   handleDelete,
   handleResumeMonitoring,
   isRefreshing,
@@ -54,6 +56,12 @@ const ProductActions: React.FC<ProductActionsProps> = ({
       <button className="btn btn-rescan" onClick={handleRescan} disabled={isRefreshing} title="Troubleshoot extraction issues by forcing a re-scan and selection modal">
         {isRefreshing ? <LoadingSpinner size="1rem" /> : 'Troubleshoot Price'}
       </button>
+      {handleAmazonCartScan && (
+        <button className="btn btn-secondary" onClick={handleAmazonCartScan} disabled={isRefreshing}
+          title="Check the default new-item offer in a temporary guest cart; no order is placed">
+          Track Amazon Cart Price
+        </button>
+      )}
       {/*
         Grouping actions sit next to the destructive one but before it, because
         "this is the same as that" is a far more common intent than deleting,

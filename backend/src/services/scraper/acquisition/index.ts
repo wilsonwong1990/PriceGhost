@@ -1,11 +1,11 @@
 import { load, type CheerioAPI } from 'cheerio';
-import { logger } from '../../../utils/system/logger';
-import { detectBotChallenge, PageNotAvailableError } from '../transport';
+import { detectBotChallenge, PageNotAvailableError, RemoteCartCapabilityUnavailable } from '../transport';
 import { RetailerConfig } from '../../../models';
 
-import { acquireRemoteHtml } from './remote';
+import { acquireRemoteAmazon, acquireRemoteHtml } from './remote';
 import { acquireStandardHtml, BotChallengeError } from './standard';
 import { handleAcquisitionFallback } from './fallback';
+import { amazonTarget, readAmazonCartMetadata, readAmazonCartObservation, type AmazonCartObservation } from './amazon';
 
 export interface AcquisitionOptions {
   url: string;
@@ -14,6 +14,8 @@ export interface AcquisitionOptions {
   productId?: number;
   extractionSteps: string[];
   requestId?: string;
+  requireAmazonCart?: boolean;
+  allowAmazonCart?: boolean;
 }
 
 export interface AcquisitionResult {
@@ -22,15 +24,48 @@ export interface AcquisitionResult {
   challengeReason: string | null;
   usedRemoteFallback: boolean;
   learnedFlags: any;
+  amazonCart?: { required: boolean; observation: AmazonCartObservation | null; metadata?: { name: string | null; imageUrl: string | null } };
+  cartStatusOnly?: boolean;
 }
 
 export async function acquireHtml(options: AcquisitionOptions): Promise<AcquisitionResult> {
   const { url, domain, domainConfig, productId, extractionSteps, requestId } = options;
+  const target = options.requireAmazonCart ? amazonTarget(url) : null;
+  if (options.requireAmazonCart && (!target || !options.allowAmazonCart)) {
+    extractionSteps.push(target
+      ? 'Amazon | Cart | Verification is limited to product tracking'
+      : 'Amazon | Cart | A canonical HTTPS product URL is required');
+    return {
+      html: '', $: load(''), challengeReason: null, usedRemoteFallback: false, learnedFlags: {},
+      amazonCart: { required: true, observation: null },
+    };
+  }
+  if (target && options.requireAmazonCart) {
+    let remote;
+    try {
+      remote = await acquireRemoteAmazon({ ...options, url: target.productUrl }, 'required');
+    } catch (error) {
+      if (error instanceof RemoteCartCapabilityUnavailable) {
+        extractionSteps.push('Amazon | Cart | Browser scraper needs an update');
+      } else {
+        throw error;
+      }
+      remote = null;
+    }
+    // Guest-cart HTML may contain ephemeral session and offer fields.
+    const observation = remote?.challengeDetected === false
+      ? readAmazonCartObservation(remote.amazonCart, target)
+      : null;
+    return {
+      html: '', $: load(''), challengeReason: null, usedRemoteFallback: false, learnedFlags: {},
+      amazonCart: { required: true, observation, metadata: observation ? readAmazonCartMetadata(remote?.amazonCart) : undefined },
+      cartStatusOnly: !observation,
+    };
+  }
   let html = '';
   let learnedFlags: any = {};
   let challengeReason: string | null = null;
   let usedRemoteFallback = false;
-
   const useBrowserScraper = domainConfig?.use_browser_scraper || false;
 
   // Set when the retailer asks for the browser scraper but this install has no
@@ -62,7 +97,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
         domain,
         domainConfig,
         extractionSteps,
-        requestId
+        requestId,
       });
     } catch (e) {
       if (e instanceof BotChallengeError) {
@@ -91,7 +126,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
       domain,
       productId,
       extractionSteps,
-      challengeReason
+      challengeReason,
       // No retailer override to pass: this branch only runs when the domain has
       // no config, so the system default is the right identity -- and is the
       // one the HTTP attempt just used.
@@ -100,7 +135,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
     if (fallbackResult) {
       return {
         ...fallbackResult,
-        usedRemoteFallback: true
+        usedRemoteFallback: true,
       };
     }
     // Deliberately no `learnedFlags = { use_browser_scraper: true }` here.

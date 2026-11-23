@@ -1,4 +1,5 @@
 import { ItemWithListings, ProductWithSparkline } from '../../../../models/types';
+import { AMAZON_CART_METHOD } from '../../../scraper/acquisition/amazon';
 
 /**
  * Groups listings into the items they belong to (issue #143).
@@ -110,7 +111,8 @@ export function groupIntoItems(
       comparable_count: comparable.length,
       excluded_count: listings.length - comparable.length,
 
-      any_in_stock: listings.some(l => l.stock_status === 'in_stock'),
+      any_in_stock: listings.some(l => l.stock_status === 'in_stock' &&
+        l.preferred_extraction_method !== AMAZON_CART_METHOD),
     });
   }
 

@@ -5,6 +5,7 @@ export interface StockStatusHistory {
   product_id: number;
   status: StockStatus;
   changed_at: Date;
+  recorded_at?: Date;
 }
 
 export interface StockStatusStats {

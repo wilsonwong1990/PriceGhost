@@ -3,8 +3,9 @@
  */
 export const scrubUrlCredentials = (val: string): string => {
   if (typeof val !== 'string') return val;
-  // Replace username:password in URL (http://user:pass@host)
-  return val.replace(/(https?:\/\/)([^:]+):([^@]+)(@[^\s/?#]+)/gi, '$1[REDACTED]:[REDACTED]$4');
+  return val.replace(/(https?:\/\/)([^/?#\s]*@)/gi, (_match, scheme: string, userinfo: string) =>
+    `${scheme}${userinfo.includes(':') ? '[REDACTED]:[REDACTED]' : '[REDACTED]'}@`
+  );
 };
 
 /**

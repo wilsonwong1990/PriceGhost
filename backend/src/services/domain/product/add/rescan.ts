@@ -1,12 +1,14 @@
 import { productRepository } from '../../../../models';
 import { scrapeProductWithVoting } from '../../../scraper';
 import { assertUrlIsSafe } from '../../../../utils/system/url-safety';
+import { AMAZON_CART_METHOD, amazonTarget } from '../../../scraper/acquisition/amazon';
+import { productPersistenceService } from '../ProductPersistenceService';
 
 export class ProductRescanService {
   /**
    * Scans an existing product to show the voting modal again.
    */
-  async scanProduct(userId: number, productId: number): Promise<any> {
+  async scanProduct(userId: number, productId: number, amazonCart = false): Promise<any> {
     const product = await productRepository.findById(productId, userId);
     if (!product) throw new Error('Product not found');
 
@@ -16,12 +18,29 @@ export class ProductRescanService {
     // checked at the point of use (issue #165).
     await assertUrlIsSafe(product.url, { policy: 'allow-private-lan' });
 
+    if (amazonCart && !amazonTarget(product.url)) {
+      const error: Error & { statusCode?: number } = new Error('Amazon cart pricing requires a plain Amazon.com or Amazon.com.au product URL without an offer or variant selection');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (amazonCart) {
+      await productPersistenceService.rememberAmazonCartRequirement(productId, userId);
+    }
     const scrapedData = await scrapeProductWithVoting(
       product.url, 
       userId, 
-      undefined, undefined, undefined, undefined, undefined, 
-      productId
+      amazonCart || product.preferred_extraction_method === AMAZON_CART_METHOD ? AMAZON_CART_METHOD : undefined,
+      undefined, undefined, undefined, undefined,
+      productId,
+      { allowAmazonCart: true }
     );
+    if (scrapedData.amazonCartRequired) {
+      await productPersistenceService.rememberAmazonCartRequirement(
+        productId,
+        userId,
+        scrapedData.amazonCartObservation ? undefined : scrapedData.unavailableReason || 'amazon_cart_price_unavailable',
+      );
+    }
 
     const candidates: any[] = scrapedData.priceCandidates.map(c => ({
       price: c.price,
@@ -61,6 +80,7 @@ export class ProductRescanService {
       stockStatus: scrapedData.stockStatus,
       priceCandidates: candidates,
       reviewReason: 'manual_rescan',
+      amazonCartRequired: scrapedData.amazonCartRequired === true,
       url: product.url,
       id: productId,
       html: scrapedData.html ? scrapedData.html.substring(0, 100_000) : null

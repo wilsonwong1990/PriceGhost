@@ -10,12 +10,14 @@ interface PriceHistoryListProps {
   history: PriceHistory[];
   currency: string;
   locale?: string;
+  cartPriceBasis?: boolean;
 }
 
 const PriceHistoryList: React.FC<PriceHistoryListProps> = ({ 
   history, 
   currency, 
-  locale
+  locale,
+  cartPriceBasis = false,
 }) => {
   const [page, setPage] = useState(1);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -74,11 +76,13 @@ const PriceHistoryList: React.FC<PriceHistoryListProps> = ({
                     {formatDate(entry.recorded_at, locale, true)}
                   </td>
                   <td className="price-cell">
-                    {formatPrice(entry.price, currency, locale)}
+                    {formatPrice(entry.price, entry.currency || currency, locale)}
                   </td>
                   <td className="method-cell">
                     <span className={`method-badge ${entry.price_type || 'standard'}`}>
-                      {getMethodLabel(entry.price_type)}
+                      {cartPriceBasis && (!entry.price_type || entry.price_type === 'standard')
+                        ? entry.details?.price_basis === 'amazon-cart-new' ? 'New item cart' : 'Earlier price (unverified)'
+                        : getMethodLabel(entry.price_type)}
                     </span>
                   </td>
                   <td className="status-cell">

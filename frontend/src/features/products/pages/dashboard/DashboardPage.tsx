@@ -129,6 +129,7 @@ const Dashboard: React.FC = () => {
         url={priceReviewData?.url || ''}
         category={priceReviewData?.category || null}
         reviewReason={priceReviewData?.reviewReason}
+        amazonCartRequired={priceReviewData?.amazonCartRequired}
       />
 
       <div className="section-container">

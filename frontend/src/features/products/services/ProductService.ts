@@ -43,6 +43,7 @@ export const ProductService = {
   create: (data: {
     url: string,
     refreshInterval?: number,
+    amazonCart?: boolean,
     selectedPrice?: number,
     selectedMethod?: string,
     selectedCurrency?: string,
@@ -55,6 +56,7 @@ export const ProductService = {
   }) => api.post<CreateProductResponse>('/products', {
     url: data.url,
     refresh_interval: data.refreshInterval,
+    amazonCart: data.amazonCart,
     selectedPrice: data.selectedPrice,
     selectedMethod: data.selectedMethod,
     selectedCurrency: data.selectedCurrency,
@@ -66,7 +68,7 @@ export const ProductService = {
     selector: data.selector,
   }),
 
-  scan: (id: number) => api.post<PriceReviewResponse>(`/products/${id}/scan`),
+  scan: (id: number, amazonCart = false) => api.post<PriceReviewResponse>(`/products/${id}/scan`, { amazonCart }),
 
   confirmSelection: (id: number, data: {
     selectedPrice?: number;
@@ -101,7 +103,7 @@ export const ProductService = {
     }),
 
   refreshPrice: (productId: number) =>
-    api.post<{ price: number; currency: string }>(`/prices/${productId}/refresh`),
+    api.post<{ message: string; stockStatus: string; status: 'ok' }>(`/prices/${productId}/refresh`),
 
   // Stock related
   getStockHistory: (productId: number, days?: number, options?: RequestOptions) =>

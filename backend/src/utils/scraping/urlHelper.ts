@@ -21,6 +21,16 @@ const KEEP_LIST = [
   'model', 'ean', 'upc', 'dwvar_', 'pdp', 'option', 'pid', 'selectedcolor', 'style', 'th'
 ];
 
+export function isAmazonMarketplaceUrl(input: string): boolean {
+  try {
+    const host = new URL(input).hostname.replace(/\.$/, '');
+    return /(?:^|\.)amazon\.[a-z.]+$/i.test(host) ||
+      ['amzn.to', 'a.co'].some(domain => host === domain || host.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Cleans a URL by removing tracking parameters and unnecessary fragments,
  * while preserving essential product identifiers (using a hybrid blacklist/whitelist approach).
@@ -28,6 +38,7 @@ const KEEP_LIST = [
 export function cleanUrl(url: string): string {
   try {
     const urlObj = new URL(url.trim());
+    const isAmazon = isAmazonMarketplaceUrl(urlObj.href);
 
     // 1. Trim trailing slash from pathname if it's not the root path
     if (urlObj.pathname.length > 1 && urlObj.pathname.endsWith('/')) {
@@ -35,11 +46,15 @@ export function cleanUrl(url: string): string {
     }
 
     const paramsToDelete: string[] = [];
+    let amazonSelectionMayBeLost = false;
     urlObj.searchParams.forEach((_, key) => {
       const lowerKey = key.toLowerCase();
 
       // Check blacklist
       const shouldStrip = STRIP_LIST.some(p => lowerKey.includes(p));
+      const amazonOfferSelection = isAmazon &&
+        /^(?:m|smid|seller|sellerid|seller-id|merchant|merchantid|merchant-id|offer|offerid|offeringid|offerlistingid|condition|itemcondition)(?:\.\d+)?$/i.test(lowerKey);
+      const amazonTracking = /^(?:utm_.+|tag|ref|ref_|tracking|qid|sr|sprefix|crid|dib|dib_tag)$/i.test(lowerKey);
 
       // Check whitelist
       const isEssential = KEEP_LIST.some(k => 
@@ -51,7 +66,8 @@ export function cleanUrl(url: string): string {
         lowerKey.endsWith('pid')
       );
 
-      if (shouldStrip || !isEssential) {
+      if (!amazonOfferSelection && (shouldStrip || !isEssential)) {
+        if (isAmazon && !amazonTracking) amazonSelectionMayBeLost = true;
         paramsToDelete.push(key);
       }
     });
@@ -59,12 +75,17 @@ export function cleanUrl(url: string): string {
     paramsToDelete.forEach(p => urlObj.searchParams.delete(p));
 
     // Strip fragments/hashes unless they look like they contain identifiers
-    if (urlObj.hash) {
+    if (urlObj.hash && !isAmazon) {
       const hashLower = urlObj.hash.toLowerCase();
       const hasEssentialHash = KEEP_LIST.some(k => hashLower.includes(k)) || hashLower.includes('pid');
       if (!hasEssentialHash) {
         urlObj.hash = '';
       }
+    }
+    // Keep an opaque marker so a stripped, unknown Amazon parameter cannot
+    // later be mistaken for an intentionally selected default offer.
+    if (isAmazon && amazonSelectionMayBeLost && !urlObj.hash) {
+      urlObj.hash = 'unverified-amazon-selection';
     }
 
     return urlObj.toString();

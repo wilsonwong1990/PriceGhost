@@ -4,6 +4,7 @@ import { productPersistenceService } from '../ProductPersistenceService';
 import { assertUrlIsSafe } from '../../../../utils/system/url-safety';
 import { FALLBACK_REFRESH_INTERVAL_SECONDS } from '../../../../utils/system/check-interval';
 import type { ScrapeFailureReason } from '../../../../types/scraper';
+import { AMAZON_CART_METHOD } from '../../../scraper/acquisition/amazon';
 
 /**
  * Turns the scrape's failure reason into something the person adding the
@@ -26,6 +27,8 @@ function describeScrapeFailure(reason?: ScrapeFailureReason, detail?: string, us
       return 'AI auto-mapping could not find a usable price on this page, so no retailer configuration was saved. Add price selectors for this retailer under Admin -> Retailers, or use the Live Tester to work them out.';
     case 'browser_scraper_failed':
       return `The Browser Scraper failed to fetch the page${detail ? ` (${detail})` : ''}. Check the Browser Scraper container and settings in Admin -> System.`;
+    case 'cart_price_unavailable':
+      return 'Amazon requires a cart to reveal this price, but the new-item cart price could not be verified. Use a supported Amazon product URL and check that the Browser Scraper is configured and up to date, then try again.';
     case 'no_price_found':
     default:
       return 'No price could be found on this page. If the price is rendered by JavaScript, enable the Browser Scraper for this retailer under Admin -> Retailers.';
@@ -36,7 +39,7 @@ export class ProductDiscoveryService {
   /**
    * Handles the "Auto-Track" vs "Review Required" logic for a new product.
    */
-  async initiateProductDiscovery(userId: number, url: string, category: string | null, refreshInterval?: number) {
+  async initiateProductDiscovery(userId: number, url: string, category: string | null, refreshInterval?: number, amazonCart = false) {
     // Any signed-in user reaches this with a URL of their choosing, and the
     // server then fetches it (issue #165). The lenient policy still allows a
     // shop on the user's own LAN -- a thing self-hosters legitimately track --
@@ -44,8 +47,16 @@ export class ProductDiscoveryService {
     // instance metadata endpoint lives and is never a shop.
     await assertUrlIsSafe(url, { policy: 'allow-private-lan' });
 
-    const scrapedData = await scrapeProductWithVoting(url, userId);
+    const scrapedData = await scrapeProductWithVoting(
+      url, userId, amazonCart ? AMAZON_CART_METHOD : undefined, undefined, undefined, undefined, undefined, undefined,
+      { allowAmazonCart: amazonCart }
+    );
 
+    if (amazonCart && (!scrapedData.amazonCartObservation || !scrapedData.price || scrapedData.needsReview)) {
+      const error: Error & { statusCode?: number } = new Error(describeScrapeFailure('cart_price_unavailable'));
+      error.statusCode = 400;
+      throw error;
+    }
     if (!scrapedData.price && scrapedData.stockStatus !== 'out_of_stock' && scrapedData.stockStatus !== 'pre_order') {
       const usedBrowserScraper = Boolean(scrapedData.learnedFlags?.use_browser_scraper);
       throw new Error(describeScrapeFailure(scrapedData.failureReason, scrapedData.failureDetail, usedBrowserScraper));
@@ -64,7 +75,8 @@ export class ProductDiscoveryService {
         refreshInterval || FALLBACK_REFRESH_INTERVAL_SECONDS,
         scrapedData.stockStatus as any,
         scrapedData.aiStatus || null,
-        category
+        category,
+        amazonCart ? AMAZON_CART_METHOD : null
       );
 
       await productPersistenceService.saveScrapeResult(product.id, userId, scrapedData, 'manual-add');
@@ -112,6 +124,7 @@ export class ProductDiscoveryService {
       stockStatus: scrapedData.stockStatus,
       priceCandidates: candidates,
       reviewReason: scrapedData.reviewReason || 'first_scan',
+      amazonCartRequired: scrapedData.amazonCartRequired === true,
       url,
       category,
       html: scrapedData.html ? scrapedData.html.substring(0, 100_000) : null

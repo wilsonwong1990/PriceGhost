@@ -21,7 +21,7 @@ export const priceHistoryRepository = {
       values.push(days.toString());
     }
 
-    query += ' ORDER BY recorded_at ASC';
+    query += ' ORDER BY recorded_at ASC, id ASC';
 
     const result = await pool.query(query, values);
     return result.rows;
@@ -49,7 +49,7 @@ export const priceHistoryRepository = {
     const result = await asExecutor(executor).query(
       `SELECT * FROM price_history
        WHERE product_id = $1 AND price_type = $2
-       ORDER BY recorded_at DESC
+       ORDER BY recorded_at DESC, id DESC
        LIMIT 1`,
       [productId, priceType]
     );

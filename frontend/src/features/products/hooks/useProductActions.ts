@@ -2,19 +2,23 @@ import { useState } from 'react';
 import { ProductService } from '../services/ProductService';
 import { useToast } from '../../../context/ToastContext';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
-import { apiErrorMessage } from '../../../api/error';
+import { apiErrorMessage, isApiError } from '../../../api/error';
 import { queryClient } from '../../../api/queryClient';
 import { queryKeys } from '../../../api/queries';
-import { invalidateProductHistory, syncProductCaches } from '../../../api/productCache';
+import { clearUnverifiedCartPrice, invalidateProductHistory, syncProductCaches } from '../../../api/productCache';
 import { PriceReviewResponse, Product } from '../../../types/api';
 
 interface UseProductActionsProps {
   onProductDeleted?: (id: number) => void;
   onProductDeleteFailed?: (id: number) => void;
   onProductUpdated?: (id: number, data: any) => void;
+  onRefreshUnverified?: (id: number) => void;
 }
 
-export function useProductActions({ onProductDeleted, onProductDeleteFailed, onProductUpdated }: UseProductActionsProps = {}) {
+const isAmazonCartUnavailable = (product: Product) =>
+  product.preferred_extraction_method === 'amazon-cart' && Boolean(product.unavailable_reason);
+
+export function useProductActions({ onProductDeleted, onProductDeleteFailed, onProductUpdated, onRefreshUnverified }: UseProductActionsProps = {}) {
   const { showToast } = useToast();
   const { execute: runAction, isLoading } = useAsyncAction();
   
@@ -23,25 +27,64 @@ export function useProductActions({ onProductDeleted, onProductDeleteFailed, onP
   const [activeProductId, setActiveProductId] = useState<number | null>(null);
 
   const handleRefresh = (id: number, fallbackName?: string | null) => runAction(async () => {
-    await ProductService.refreshPrice(id);
+    try {
+      await ProductService.refreshPrice(id);
+    } catch (error) {
+      const body = isApiError(error) && error.body && typeof error.body === 'object'
+        ? error.body as { status?: unknown } : null;
+      const cartUnverified = body?.status === 'unavailable' || body?.status === 'superseded';
+      if (cartUnverified) {
+        clearUnverifiedCartPrice(id);
+        onRefreshUnverified?.(id);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.products.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.products.items }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.products.detail(id) }),
+        invalidateProductHistory(id),
+      ]);
+      if (cartUnverified) {
+        try {
+          const updated = await ProductService.getById(id);
+          syncProductCaches(updated);
+          onProductUpdated?.(id, updated);
+        } catch (reloadError) {
+          throw new Error(`${apiErrorMessage(error)} Failed to reload product: ${apiErrorMessage(reloadError)}`);
+        }
+      }
+      throw error;
+    }
     const updatedProductRes = await ProductService.getById(id);
     syncProductCaches(updatedProductRes);
+    if (updatedProductRes.preferred_extraction_method === 'amazon-cart') {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.products.items });
+    }
     // A refresh records a new price and stock reading, so the cached history has
     // to go before anything reloads it.
     await invalidateProductHistory(id);
     if (onProductUpdated) onProductUpdated(id, updatedProductRes);
+    if (isAmazonCartUnavailable(updatedProductRes)) {
+      showToast('Amazon cart price could not be verified.', 'error');
+    }
     return updatedProductRes;
   }, {
     onSuccessMessage: (res) => {
+      if (isAmazonCartUnavailable(res)) return '';
       const name = res?.name || fallbackName;
       return name ? `${name} price refreshed` : `Product #${id} price refreshed`;
     },
-    onErrorFallback: 'Failed to refresh price'
+    onErrorMessage: 'Failed to refresh price'
   });
 
-  const handleRescan = (id: number) => runAction(async () => {
+  const handleRescan = (id: number, amazonCart = false) => runAction(async () => {
     setActiveProductId(id);
-    const res = await ProductService.scan(id);
+    const res = await ProductService.scan(id, amazonCart);
+    if (res.amazonCartRequired) {
+      const updatedProduct = await ProductService.getById(id);
+      syncProductCaches(updatedProduct);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.products.items });
+      if (onProductUpdated) onProductUpdated(id, updatedProduct);
+    }
     setPriceReviewData(res);
     setShowPriceModal(true);
   }, { onErrorMessage: 'Failed to start re-scan' });
@@ -67,6 +110,9 @@ export function useProductActions({ onProductDeleted, onProductDeleteFailed, onP
   const handleTogglePause = (id: number, targetPaused: boolean, fallbackName?: string | null) => runAction(async () => {
     const res = await ProductService.update(id, { checking_paused: targetPaused });
     syncProductCaches(res);
+    if (res.preferred_extraction_method === 'amazon-cart') {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.products.items });
+    }
     if (onProductUpdated) onProductUpdated(id, res);
     return res;
   }, {

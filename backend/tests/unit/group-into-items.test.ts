@@ -205,6 +205,17 @@ describe('stock', () => {
     ], 'CHF');
     expect(items[0].any_in_stock).toBe(false);
   });
+
+  it('does not count cart-only checks as confirmed in stock', () => {
+    const failedCart = listing({
+      preferred_extraction_method: 'amazon-cart',
+      unavailable_reason: 'amazon_cart_price_unavailable',
+      stock_status: 'in_stock',
+    });
+    expect(groupIntoItems([failedCart], 'CHF')[0].any_in_stock).toBe(false);
+    expect(groupIntoItems([{ ...failedCart, unavailable_reason: null }], 'CHF')[0].any_in_stock).toBe(false);
+    expect(groupIntoItems([failedCart, listing({ id: 2, is_primary: false })], 'CHF')[0].any_in_stock).toBe(true);
+  });
 });
 
 describe('alert settings come from the item', () => {

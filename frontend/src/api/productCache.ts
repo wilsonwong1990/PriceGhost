@@ -13,6 +13,28 @@ export function syncProductCaches(updated: Product): void {
 }
 
 /**
+ * Hides a cached cart price once a refresh could not verify it, so a failed
+ * reload cannot leave the previous verified price on screen.
+ */
+export function clearUnverifiedCartPrice(productId: number): void {
+  const clear = <T extends Product>(product: T): T => ({
+    ...product,
+    current_price: null,
+    currency: null,
+    converted_price: null,
+    stock_status: 'unknown',
+    preferred_extraction_method: 'amazon-cart',
+    unavailable_reason: 'amazon_cart_price_unavailable',
+  });
+  queryClient.setQueryData<Product[]>(queryKeys.products.all, (products) =>
+    products?.map((product) => product.id === productId ? clear(product) : product),
+  );
+  queryClient.setQueryData<ProductWithStats>(queryKeys.products.detail(productId), (product) =>
+    product ? clear(product) : product,
+  );
+}
+
+/**
  * Drops the cached price and stock history of a product after an action that
  * recorded a new reading.
  *

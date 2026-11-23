@@ -33,6 +33,7 @@ export default function AddProductPage() {
         url={priceReviewData?.url || ''}
         category={priceReviewData?.category || null}
         reviewReason={priceReviewData?.reviewReason}
+        amazonCartRequired={priceReviewData?.amazonCartRequired}
       />
     </Layout>
   );

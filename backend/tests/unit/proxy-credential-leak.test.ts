@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { scrubUrlCredentials, scrubSensitiveData } from '../../src/utils/system/logging/scrubber';
+import { scrubUrlCredentials as scrubScraperUrl, scrubLogMetadata } from '../../../scraper/src/utils/scrub';
 
 /**
  * A configured proxy can carry credentials -- http://user:pass@host:8080 --
@@ -44,6 +45,22 @@ describe('a proxy URL recorded in the extraction trace', () => {
   it('handles https the same way', () => {
     expect(scrubUrlCredentials('https://u:p@secure-proxy.example.com'))
       .toBe('https://[REDACTED]:[REDACTED]@secure-proxy.example.com');
+  });
+
+  it.each([
+    ['http://name@proxy.example.com', 'http://[REDACTED]@proxy.example.com'],
+    ['http://name:@proxy.example.com', 'http://[REDACTED]:[REDACTED]@proxy.example.com'],
+    ['http://name:p@ss@proxy.example.com', 'http://[REDACTED]:[REDACTED]@proxy.example.com'],
+  ])('redacts every userinfo form in backend and scraper: %s', (url, expected) => {
+    expect(scrubUrlCredentials(url)).toBe(expected);
+    expect(scrubScraperUrl(url)).toBe(expected);
+  });
+
+  it('redacts credentials and request secrets from scraper log metadata', () => {
+    const metadata = { stack: 'failed at http://name:@proxy.example.com', cookie: 'private', body: 'private' };
+    const scrubbed = JSON.stringify(scrubLogMetadata(metadata));
+    expect(scrubbed).not.toContain('name:');
+    expect(scrubbed).not.toContain('private');
   });
 });
 

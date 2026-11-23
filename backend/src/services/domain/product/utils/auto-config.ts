@@ -7,6 +7,7 @@ import { PoolClient } from 'pg';
 import { ScrapedProductWithVoting } from '../../../../types/scraper';
 import { getRetailerDescription } from '../../../../utils/scraping/retailerHelper';
 import { normalizeSelector } from '../../../scraper/core';
+import { AMAZON_CART_METHOD } from '../../../scraper/acquisition/amazon';
 import { 
   getAllGenericSelectors, 
   resolveWinningSelector, 
@@ -63,7 +64,10 @@ export async function runAutoRetailerConfig(params: {
       const allGenericSelectors = await getAllGenericSelectors();
 
       // 1. Resolve selector to prioritize
-      let { selector: winningSelector, method: winningMethod } = resolveWinningSelector(scrapedData, manualSelector);
+      const selectorlessCart = scrapedData?.amazonCartRequired || scrapedData?.selectedMethod === AMAZON_CART_METHOD;
+      let { selector: winningSelector, method: winningMethod } = selectorlessCart
+        ? { selector: undefined, method: AMAZON_CART_METHOD }
+        : resolveWinningSelector(scrapedData, manualSelector);
 
       let targetArrayName = 'price_selectors';
       let targetArray = priceSelectors;
@@ -131,7 +135,7 @@ export async function runAutoRetailerConfig(params: {
         preOrderPriceSelectors,
         originalPriceSelectors
       ];
-      for (const arr of allCustomArrays) {
+      for (const arr of selectorlessCart ? [] : allCustomArrays) {
         for (const sel of arr) {
           const normSel = sel.trim().toLowerCase();
           if (winningSelector && normSel === winningSelector.trim().toLowerCase()) {

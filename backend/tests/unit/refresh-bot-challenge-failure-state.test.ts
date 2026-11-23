@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import express from 'express';
+import http from 'node:http';
 import type { Product } from '../../src/models/types';
 import type { ScrapedProductWithVoting } from '../../src/types/scraper';
 import type { UnavailableReason } from '../../src/types/availability';
@@ -66,6 +68,20 @@ vi.mock('../../src/utils/system/url-safety', () => ({
 
 vi.mock('../../src/utils/system/logger', () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+}));
+
+vi.mock('../../src/middleware/auth', () => ({
+  authMiddleware: (req: { userId?: number }, _res: unknown, next: () => void) => {
+    req.userId = 1;
+    next();
+  },
+}));
+vi.mock('../../src/middleware/scope', () => ({
+  requireScopeByMethod: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+vi.mock('../../src/services/domain/product', async () => ({
+  productHistoryService: { getProduct: vi.fn().mockImplementation(() => product({ url: 'https://www.amazon.com/dp/B012345678' })) },
+  productRefreshService: (await import('../../src/services/domain/product/ProductRefreshService')).productRefreshService,
 }));
 
 const product = (over: Partial<Product> = {}): Product => ({
@@ -168,6 +184,175 @@ describe('a denied refresh', () => {
   });
 });
 
+describe('Amazon cart refresh notifications', () => {
+  const amazonUrl = 'https://www.amazon.com/dp/B012345678';
+  const observation = {
+    asin: 'B012345678',
+    marketplace: 'amazon.com',
+    condition: 'new',
+    price: 249.99,
+    currency: 'USD',
+  } as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    persistence.saveScrapeResult.mockResolvedValue(null);
+  });
+
+  describe('Amazon cart refresh API', () => {
+    let server: http.Server;
+    let endpoint: string;
+
+    beforeAll(async () => {
+      const router = (await import('../../src/routes/prices')).default;
+      const app = express();
+      app.use(router);
+      server = http.createServer(app);
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Test server did not bind');
+      endpoint = `http://127.0.0.1:${address.port}/42/refresh`;
+    });
+
+    afterAll(async () => {
+      if (server) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    });
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+    });
+
+    it('does not expose stale stock when a cart opt-in overtakes the refresh', async () => {
+      scrape.mockResolvedValue({ ...denied(), stockStatus: 'in_stock', price: { price: 99, currency: 'USD' } });
+      persistence.saveScrapeResult.mockResolvedValue({ stock: null, price: null, ignored: true });
+      const response = await fetch(endpoint, { method: 'POST' });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ status: 'superseded', stockStatus: 'unknown' });
+    });
+
+    it('reports an unverified cart as unavailable rather than a successful refresh', async () => {
+      scrape.mockResolvedValue({ ...denied('amazon_cart_price_unavailable'), amazonCartRequired: true });
+      persistence.saveScrapeResult.mockResolvedValue({ stock: null, price: null, failureStreak: 1 });
+      const response = await fetch(endpoint, { method: 'POST' });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({
+        status: 'unavailable', stockStatus: 'unknown', error: 'Amazon cart price could not be verified.',
+      });
+    });
+  });
+
+  it('only reports an unverified cart as unavailable and never announces its page offer', async () => {
+    persistence.saveScrapeResult.mockResolvedValue({
+      stock: null, price: null, failureStreak: 6,
+    });
+    await refresh({
+      ...denied('amazon_cart_price_unavailable'),
+      url: amazonUrl,
+      amazonCartRequired: true,
+    }, { url: amazonUrl, target_price: 250, notify_back_in_stock: true });
+
+    expect(repo.recordFailure).not.toHaveBeenCalled();
+    expect(notifications.notifyNotAvailable).toHaveBeenCalledTimes(1);
+    expect(notifications.notifyPriceDrop).not.toHaveBeenCalled();
+    expect(notifications.notifyTargetHit).not.toHaveBeenCalled();
+    expect(notifications.notifyBackInStock).not.toHaveBeenCalled();
+  });
+
+  it('compares only a transition persisted under the cart price basis', async () => {
+    persistence.saveScrapeResult.mockResolvedValue({
+      stock: null, price: { previousPrice: null, hadPreviousPrice: true, currentPrice: { price: 249.99, currency: 'USD' } },
+    });
+    await refresh({
+      ...denied(),
+      url: amazonUrl,
+      failureReason: undefined,
+      price: { price: 249.99, currency: 'USD' },
+      amazonCartRequired: true,
+      amazonCartObservation: observation,
+    }, { url: amazonUrl, stock_status: 'pre_order', target_price: 250, price_drop_threshold: 5 });
+
+    expect(notifications.notifyPriceDrop).not.toHaveBeenCalled();
+    expect(notifications.notifyPriceAnnounced).not.toHaveBeenCalled();
+    expect(notifications.notifyTargetHit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42 }), null, { price: 249.99, currency: 'USD' }
+    );
+    expect(repo.clearFailureState).not.toHaveBeenCalled();
+  });
+
+  it('does not clear a newer Amazon failure outside the product lock when resuming', async () => {
+    persistence.saveScrapeResult.mockResolvedValue({ stock: null, price: null });
+    await refresh({
+      ...denied(),
+      url: amazonUrl,
+      failureReason: undefined,
+      stockStatus: 'in_stock',
+      price: { price: 249.99, currency: 'USD' },
+      amazonCartRequired: true,
+      amazonCartObservation: observation,
+    }, { url: amazonUrl, checking_paused: true, auto_paused: true });
+
+    expect(repo.setPaused).toHaveBeenCalledWith(42, false, false);
+    expect(repo.setUnavailableReason).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('resumes only a system-paused cart product after recovery (auto-paused: %s)', async autoPaused => {
+    persistence.saveScrapeResult.mockImplementationOnce(async (_id, _userId, scraped) => {
+      scraped.stockStatus = 'unknown';
+      return { stock: { from: 'not_available', to: 'unknown' }, price: null };
+    });
+    await refresh({
+      ...denied(),
+      url: amazonUrl,
+      failureReason: undefined,
+      stockStatus: 'unknown',
+      price: { price: 249.99, currency: 'USD' },
+      amazonCartRequired: true,
+      amazonCartObservation: observation,
+    }, {
+      url: amazonUrl, stock_status: 'not_available', checking_paused: true, auto_paused: autoPaused,
+      notify_back_in_stock: true,
+    });
+    if (autoPaused) {
+      expect(repo.setPaused).toHaveBeenCalledWith(42, false, false);
+      expect(notifications.notifyProductRestored).toHaveBeenCalledOnce();
+    } else {
+      expect(repo.setPaused).not.toHaveBeenCalled();
+      expect(notifications.notifyProductRestored).not.toHaveBeenCalled();
+    }
+    expect(notifications.notifyBackInStock).not.toHaveBeenCalled();
+  });
+
+  it('does not notify or clear failures for a stale pre-cart scrape', async () => {
+    persistence.saveScrapeResult.mockResolvedValue({ stock: null, price: null, ignored: true });
+    await refresh({
+      ...denied(),
+      url: amazonUrl,
+      failureReason: undefined,
+      price: { price: 208, currency: 'USD' },
+    }, { url: amazonUrl, target_price: 250 });
+    expect(repo.clearFailureState).not.toHaveBeenCalled();
+    expect(notifications.notifyTargetHit).not.toHaveBeenCalled();
+  });
+
+  it('does not announce a pre-order price when a prior price has a different currency', async () => {
+    persistence.saveScrapeResult.mockResolvedValue({
+      stock: null, price: { previousPrice: null, hadPreviousPrice: true, currentPrice: { price: 80, currency: 'USD' } },
+    });
+    await refresh({ ...denied(), failureReason: undefined, price: { price: 80, currency: 'USD' } },
+      { stock_status: 'pre_order' });
+    expect(notifications.notifyPriceAnnounced).not.toHaveBeenCalled();
+  });
+
+  it('still announces the first recorded pre-order price', async () => {
+    persistence.saveScrapeResult.mockResolvedValue({
+      stock: null, price: { previousPrice: null, hadPreviousPrice: false, currentPrice: { price: 80, currency: 'USD' } },
+    });
+    await refresh({ ...denied(), failureReason: undefined, price: { price: 80, currency: 'USD' } },
+      { stock_status: 'pre_order' });
+    expect(notifications.notifyPriceAnnounced).toHaveBeenCalledOnce();
+  });
+});
+
 describe('page-gone streak debouncing and auto-pause recovery (commit 98c97da)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -208,7 +393,7 @@ describe('page-gone streak debouncing and auto-pause recovery (commit 98c97da)',
   });
 
   it('marks the product not_available, pauses monitoring, and notifies on the third consecutive 404', async () => {
-    persistence.saveScrapeResult.mockResolvedValueOnce({ from: 'in_stock', to: 'not_available' });
+    persistence.saveScrapeResult.mockResolvedValueOnce({ stock: { from: 'in_stock', to: 'not_available' }, price: null });
 
     await refresh(gone('http_404'), { stock_status: 'in_stock', page_gone_streak: 2 });
 

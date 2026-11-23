@@ -38,11 +38,37 @@ export const MIN_REQUEST_TIMEOUT_MS = 70000;
  */
 export const REMOTE_RESPONSE_OVERHEAD_MS = 15000;
 
+export interface RemoteScrapeResult {
+  html: string;
+  amazonCart?: unknown;
+  finalUrl?: string;
+  challengeDetected?: boolean;
+}
+
+export class RemoteCartCapabilityUnavailable extends Error {}
+export class RemoteCartTransportFailure extends Error {}
+
 /**
  * Fetches HTML via the remote scraper instance (ruski).
  */
-export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, options: any = {}): Promise<string> {
-  const maxRetries = 3;
+export async function fetchRemoteHtml(
+  url: string,
+  remoteScraperUrl: string,
+  options: any = {},
+  onFinalUrl?: (url: string) => void,
+): Promise<string> {
+  const result = await fetchRemoteScrape(url, remoteScraperUrl, options);
+  if (result.finalUrl) onFinalUrl?.(result.finalUrl);
+  return result.html;
+}
+
+export async function fetchRemoteScrape(url: string, remoteScraperUrl: string, options: any = {}): Promise<RemoteScrapeResult> {
+  const isCartRequest = options.amazonCartMode === 'auto' || options.amazonCartMode === 'required';
+  const cartToken = isCartRequest ? process.env.AMAZON_CART_SCRAPER_TOKEN : undefined;
+  if (isCartRequest && (!cartToken || Buffer.byteLength(cartToken) < 32)) {
+    throw new RemoteCartCapabilityUnavailable('Amazon cart checks are not configured');
+  }
+  const maxRetries = isCartRequest ? 0 : 3;
   let retryCount = 0;
 
   // Generate a unique Request ID for traceability across services
@@ -69,7 +95,8 @@ export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, opt
         logger.debug(`${logPrefix} | Requesting | ${url} (via ${remoteScraperUrl})`, 'Scraper');
       }
 
-      const endpoint = remoteScraperUrl.endsWith('/scrape') ? remoteScraperUrl : `${remoteScraperUrl}/scrape`;
+      const base = remoteScraperUrl.replace(/\/scrape\/?$/, '').replace(/\/$/, '');
+      const endpoint = isCartRequest ? `${base}/amazon/cart-price` : `${base}/scrape`;
       
       const payload = {
         url,
@@ -86,22 +113,29 @@ export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, opt
       const start = Date.now();
       const response = await axios.post(endpoint, payload, { 
         timeout: requestTimeout,
-        signal: controller.signal
+        signal: controller.signal,
+        ...(cartToken ? { headers: { Authorization: `Bearer ${cartToken}` }, maxRedirects: 0 } : {}),
       });
-
       const latency = Date.now() - start;
-      logger.info(`${logPrefix} | Success | Url: ${url} | Latency: ${latency}ms`, 'Scraper', {
+      logger.info(`${logPrefix} | ${isCartRequest ? 'Response' : 'Success'} | Url: ${url} | Latency: ${latency}ms`, 'Scraper', {
         requestId,
         productId,
         url,
         latency
       });
 
-      return response.data.html || '';
+      return {
+        html: typeof response.data?.html === 'string' ? response.data.html : '',
+        amazonCart: response.data?.amazonCart,
+        finalUrl: typeof response.data?.finalUrl === 'string' ? response.data.finalUrl : undefined,
+        challengeDetected: typeof response.data?.challengeDetected === 'boolean'
+          ? response.data.challengeDetected : undefined,
+      };
 
     } catch (error: any) {
       if (axios.isCancel(error) || error.name === 'AbortError') {
         logger.warn(`Browser Scraper | [${requestId}] | Aborted | Request for ${url} was canceled by backend`, 'Scraper');
+        if (isCartRequest) throw new RemoteCartTransportFailure('Browser Scraper request aborted');
         throw new Error('Browser Scraper request aborted');
       }
 
@@ -113,6 +147,7 @@ export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, opt
       // Scraper URL endpoint does not exist — a configuration problem, never
       // evidence that the product page is gone.
       if (status === 404 || status === 410) {
+        if (isCartRequest) throw new RemoteCartCapabilityUnavailable('Browser Scraper does not support Amazon cart checks');
         throw new Error(`Browser Scraper endpoint not found (${status}) — check the Browser Scraper URL setting`);
       }
 
@@ -125,7 +160,11 @@ export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, opt
         continue;
       }
 
-      throw new Error(`Browser Scraper failed (${status}): ${msg}`);
+      const message = `Browser Scraper failed (${status}): ${msg}`;
+      if (isCartRequest && (typeof status === 'number' || axios.isAxiosError(error))) {
+        throw new RemoteCartTransportFailure(message);
+      }
+      throw new Error(message);
     } finally {
       clearTimeout(abortTimeout);
     }

@@ -177,6 +177,234 @@ test('uses the preloaded detail cache while preserving state across nested secti
   await expect(pauseTracking).toBeChecked();
 });
 
+test('separates earlier Amazon offers from verified cart history', async ({ page }) => {
+  const amazonProduct = {
+    ...product,
+    current_price: null,
+    currency: null,
+    preferred_extraction_method: 'amazon-cart',
+    unavailable_reason: 'amazon_cart_price_unavailable',
+  };
+  const prices = [
+    { id: 1, price: 208, currency: 'USD', price_type: 'standard', recorded_at: '2026-01-01T10:00:00Z' },
+    {
+      id: 2, price: 249.99, currency: 'USD', price_type: 'standard',
+      recorded_at: '2026-01-02T10:00:00Z', details: { price_basis: 'amazon-cart-new' },
+    },
+  ];
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1', async route => route.fulfill({ json: amazonProduct }));
+  await page.route('**/api/prices/1/history**', async route => route.fulfill({ json: { product: amazonProduct, prices } }));
+  await page.route('**/api/prices/1/stock-history**', async route => route.fulfill({ json: {
+    history: [{ id: 1, product_id: 1, status: 'in_stock', changed_at: '2022-01-05T12:00:00Z', recorded_at: '2021-01-05T12:00:00Z' }],
+    stats: { current_status: 'in_stock', days_in_current_status: 5, availability_percent: 100, outage_count: 0 },
+  } }));
+  await page.route('**/api/prices/1/refresh', async route => route.fulfill({
+    status: 503, json: { status: 'unavailable', error: 'Amazon cart price could not be verified.' },
+  }));
+
+  await page.goto('/products/1');
+  await expect(page.getByText('A current new-item cart price could not be verified.')).toBeVisible();
+  await expect(page.getByText('Stock unverified', { exact: true })).toBeVisible();
+  await expect(page.getByText('In Stock', { exact: true })).not.toBeVisible();
+  await page.getByRole('button', { name: 'Refresh Price Now' }).click();
+  await expect(page.getByText('Failed to refresh price: Amazon cart price could not be verified.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Acceptance Product price refreshed')).not.toBeVisible();
+  await page.getByRole('button', { name: 'Price History' }).click();
+  await expect(page.locator('.price-chart-stats .price-stat-value')).toHaveText(['$249.99', '$249.99', '$249.99']);
+  await page.getByText('Detailed Price History').click();
+  await expect(page.getByText('New item cart', { exact: true })).toBeVisible();
+  await expect(page.getByText('Earlier price (unverified)', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Stock Availability' }).click();
+  await expect(page.getByText('Current stock is unverified. Availability estimates are unavailable; earlier stock recordings are shown below.')).toBeVisible();
+  await expect(page.locator('.stock-timeline-bar, .stock-timeline-stats')).toHaveCount(0);
+  await page.getByText('Detailed Stock History').click();
+  await expect(page.getByText('In Stock', { exact: true })).toBeVisible();
+  await expect(page.locator('.stock-history-table .date-cell')).toContainText('2021');
+  await page.route('**/api/prices/1/stock-history**', async route => route.fulfill({ json: {
+    history: [{ id: 0, product_id: 1, status: 'in_stock', changed_at: '2022-01-05T12:00:00Z' }],
+    stats: { current_status: 'in_stock', days_in_current_status: 5, availability_percent: 100, outage_count: 0 },
+  } }));
+  await page.reload();
+  await page.getByRole('button', { name: 'Stock Availability' }).click();
+  await expect(page.getByText('No stock history recorded yet.')).toBeVisible();
+});
+
+test('shows a verified cart price without claiming stock is verified', async ({ page }) => {
+  const amazonProduct = {
+    ...product,
+    current_price: 249.99,
+    currency: 'USD',
+    stock_status: 'out_of_stock',
+    preferred_extraction_method: 'amazon-cart',
+    unavailable_reason: null,
+  };
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1', async route => route.fulfill({ json: amazonProduct }));
+
+  await page.goto('/products/1');
+  await expect(page.locator('.product-detail-price')).toContainText('$249.99');
+  await expect(page.locator('.product-detail-price .price-inactive')).toHaveCount(0);
+  await expect(page.getByText('Stock unverified', { exact: true })).toBeVisible();
+  await expect(page.getByText('In Stock', { exact: true })).not.toBeVisible();
+});
+
+for (const reloadFails of [false, true]) {
+  test(`hides a previous cart price after a failed refresh${reloadFails ? ' even if reload fails' : ''}`, async ({ page }) => {
+    let failed = false;
+    const verified = {
+      ...product, url: 'https://www.amazon.com/dp/B012345678',
+      current_price: 249.99, preferred_extraction_method: 'amazon-cart', unavailable_reason: null,
+    };
+    const unavailable = { ...verified, current_price: null, currency: null, unavailable_reason: 'amazon_cart_price_unavailable' };
+    await page.addInitScript((user) => {
+      localStorage.setItem('token', 'acceptance-token');
+      localStorage.setItem('user', JSON.stringify(user));
+    }, authenticatedUser);
+    await page.route('**/api/products/1', async route => {
+      if (failed && reloadFails) {
+        await route.fulfill({ status: 503, json: { error: 'Product reload failed' } });
+      } else {
+        await route.fulfill({ json: failed ? unavailable : verified });
+      }
+    });
+    await page.route('**/api/prices/1/history**', async route => route.fulfill({ json: { product: verified, prices: [] } }));
+    await page.route('**/api/prices/1/refresh', async route => {
+      failed = true;
+      await route.fulfill({ status: 503, json: { status: 'unavailable', error: 'Amazon cart price could not be verified.' } });
+    });
+
+    await page.goto('/products/1');
+    await expect(page.locator('.product-detail-price')).toContainText('$249.99');
+    await page.getByRole('button', { name: 'Refresh Price Now' }).click();
+    await expect(page.locator('.product-detail-price')).toContainText('Price unavailable');
+    await expect(page.getByText('A current new-item cart price could not be verified.')).toBeVisible();
+    await expect(page.getByText(/Failed to refresh price: Amazon cart price could not be verified/)).toBeVisible();
+    if (reloadFails) {
+      await expect(page.getByText(/Failed to reload product: Product reload failed/)).toBeVisible();
+    }
+  });
+}
+
+test('hides a previous cart price on the dashboard while the reload is pending', async ({ page }) => {
+  let failed = false;
+  const verified = {
+    ...product, url: 'https://www.amazon.com/dp/B012345678',
+    current_price: 249.99, preferred_extraction_method: 'amazon-cart', unavailable_reason: null,
+  };
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products', async route => {
+    // A slow reload must not leave the old verified price on the card meanwhile.
+    if (failed) return;
+    await route.fulfill({ json: [verified] });
+  });
+  await page.route('**/api/products/1', async () => undefined);
+  await page.route('**/api/prices/1/refresh', async route => {
+    failed = true;
+    await route.fulfill({ status: 503, json: { status: 'unavailable', error: 'Amazon cart price could not be verified.' } });
+  });
+
+  await page.goto('/products');
+  await expect(page.getByText('$249.99')).toBeVisible();
+  await page.getByTitle('Refresh Price').click();
+  await expect(page.getByText('$249.99')).toHaveCount(0);
+  await expect(page.getByText('Acceptance Product')).toBeVisible();
+});
+
+test('hides the old price and prevents manual entry after a failed Amazon rescan', async ({ page }) => {
+  let scanned = false;
+  const unavailable = {
+    ...product,
+    url: 'https://www.amazon.com/dp/B012345678',
+    current_price: null,
+    currency: null,
+    preferred_extraction_method: 'amazon-cart',
+    unavailable_reason: 'amazon_cart_price_unavailable',
+  };
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1/scan', async route => {
+    scanned = true;
+    await route.fulfill({ json: {
+      needsReview: true, amazonCartRequired: true, priceCandidates: [],
+      name: product.name, url: unavailable.url, reviewReason: 'manual_rescan',
+    } });
+  });
+  await page.route('**/api/products/1', async route => {
+    await route.fulfill({ json: scanned ? unavailable : product });
+  });
+
+  await page.goto('/products/1');
+  await expect(page.locator('.product-detail-price')).toContainText('$25.00');
+  await page.getByRole('button', { name: 'Troubleshoot Price' }).click();
+  await expect(page.getByText('No verified Amazon cart price is available. Refresh and try again.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'None of these look right' })).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirm Selection' })).toBeDisabled();
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.locator('.product-detail-price')).toContainText('Price unavailable');
+  await expect(page.getByText('Stock unverified', { exact: true })).toBeVisible();
+});
+
+test('requires explicit opt-in when adding an Amazon cart listing', async ({ page }) => {
+  let submitted: Record<string, unknown> | undefined;
+  const url = 'https://www.amazon.com/dp/B012345678';
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products', async route => {
+    if (route.request().method() !== 'POST') {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    submitted = route.request().postDataJSON();
+    await route.fulfill({ status: 201, json: { ...product, url, preferred_extraction_method: 'amazon-cart' } });
+  });
+
+  await page.goto('/products/new');
+  await page.getByLabel('Product URL').fill(url);
+  const optIn = page.getByLabel('Track the new-item Amazon cart price');
+  await expect(optIn).not.toBeChecked();
+  await optIn.check();
+  await page.getByRole('button', { name: 'Add Product' }).click();
+  await expect.poll(() => submitted?.amazonCart).toBe(true);
+  await expect(page).toHaveURL(/\/products\/1$/);
+});
+
+test('explains and confirms cart opt-in before rescanning an existing listing', async ({ page }) => {
+  const amazon = { ...product, url: 'https://www.amazon.com/dp/B012345678' };
+  let submitted: Record<string, unknown> | undefined;
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/products/1', async route => route.fulfill({ json: amazon }));
+  await page.route('**/api/products/1/scan', async route => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({ json: {
+      needsReview: true, amazonCartRequired: true, name: amazon.name, url: amazon.url,
+      priceCandidates: [],
+    } });
+  });
+  await page.goto('/products/1');
+  await page.getByRole('button', { name: 'Track Amazon Cart Price' }).click();
+  await expect(page.getByText(/Each check adds one item to a temporary guest cart/)).toBeVisible();
+  expect(submitted).toBeUndefined();
+  await page.getByRole('button', { name: 'Track Cart Price' }).click();
+  await expect.poll(() => submitted?.amazonCart).toBe(true);
+});
+
 test('renders each canonical application destination for an authenticated user', async ({ page }) => {
   await page.addInitScript((user) => {
     localStorage.setItem('token', 'acceptance-token');

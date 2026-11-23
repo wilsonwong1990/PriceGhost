@@ -1,4 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router';
+import { isAmazonCartStockUnverified } from '../../../../utils/availability';
 import ErrorBoundary from '../../../../components/ErrorBoundary';
 import { REFRESH_INTERVALS } from '../../constants';
 import AdvancedSettingsSection from './AdvancedSettingsSection';
@@ -38,7 +39,7 @@ export default function ProductDetailSection({ section }: { section: ProductDeta
       </div>
       {section === 'overview' && <ErrorBoundary section="the overview"><OverviewSection product={state.product!} user={user} state={state} REFRESH_INTERVALS={REFRESH_INTERVALS} /></ErrorBoundary>}
       {section === 'chart' && <ErrorBoundary section="the price history"><PriceHistorySection product={state.product!} prices={state.prices} handleRangeChange={state.handleRangeChange} rangeDays={state.historyDays} user={user} /></ErrorBoundary>}
-      {section === 'stock' && <ErrorBoundary section="stock availability"><StockAvailabilitySection productId={productId} /></ErrorBoundary>}
+      {section === 'stock' && <ErrorBoundary section="stock availability"><StockAvailabilitySection productId={productId} currentStockUnverified={isAmazonCartStockUnverified(state.product!)} /></ErrorBoundary>}
       {section === 'notifications' && <ErrorBoundary section="notification settings"><NotificationSettingsSection notificationSettings={state.notificationSettings} priceDropThreshold={state.priceDropThreshold} setPriceDropThreshold={state.setPriceDropThreshold} targetPrice={state.targetPrice} setTargetPrice={state.setTargetPrice} notifyBackInStock={state.notifyBackInStock} setNotifyBackInStock={state.setNotifyBackInStock} handleSaveNotifications={state.handleSaveNotifications} isSavingNotifications={state.isSavingNotifications} /></ErrorBoundary>}
       {section === 'settings' && <ErrorBoundary section="advanced settings"><AdvancedSettingsSection isAdvancedCollapsed={state.isAdvancedCollapsed} setIsAdvancedCollapsed={state.setIsAdvancedCollapsed} checkingPaused={state.checkingPaused} setCheckingPaused={state.setCheckingPaused} aiExtractionDisabled={state.aiExtractionDisabled} setAiExtractionDisabled={state.setAiExtractionDisabled} aiVerificationDisabled={state.aiVerificationDisabled} setAiVerificationDisabled={state.setAiVerificationDisabled} handleSaveNotifications={state.handleSaveNotifications} isSavingNotifications={state.isSavingNotifications} /></ErrorBoundary>}
     </>

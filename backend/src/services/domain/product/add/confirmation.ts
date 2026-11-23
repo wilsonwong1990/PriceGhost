@@ -2,6 +2,63 @@ import { productRepository, ProductWithLatestPrice } from '../../../../models';
 import { productPersistenceService } from '../ProductPersistenceService';
 import { logger } from '../../../../utils/system/logger';
 import { FALLBACK_REFRESH_INTERVAL_SECONDS } from '../../../../utils/system/check-interval';
+import { assertUrlIsSafe } from '../../../../utils/system/url-safety';
+import { scrapeProductWithVoting } from '../../../scraper';
+import { AMAZON_CART_METHOD, amazonTarget } from '../../../scraper/acquisition/amazon';
+
+function isCartSelection(url: string, method: unknown): boolean {
+  if (method !== AMAZON_CART_METHOD) return false;
+  if (amazonTarget(url)) return true;
+  const error: Error & { statusCode?: number } = new Error('Amazon cart pricing requires a supported Amazon product URL');
+  error.statusCode = 400;
+  throw error;
+}
+
+function rejectStaleSelection(ignored?: boolean): void {
+  if (!ignored) return;
+  const error: Error & { statusCode?: number } = new Error(
+    'This product now requires a verified Amazon cart price. Refresh it before choosing a price.'
+  );
+  error.statusCode = 409;
+  throw error;
+}
+
+async function verifyCartSelection(
+  userId: number,
+  url: string,
+  selectedPrice: unknown,
+  selectedCurrency: unknown,
+  productId?: number,
+) {
+  if (typeof selectedPrice !== 'number' || !Number.isFinite(selectedPrice) || selectedPrice <= 0 ||
+      typeof selectedCurrency !== 'string' || !selectedCurrency) {
+    const error: Error & { statusCode?: number } = new Error('A price and currency are required to confirm a product');
+    error.statusCode = 400;
+    throw error;
+  }
+  await assertUrlIsSafe(url, { policy: 'allow-private-lan' });
+  const scraped = await scrapeProductWithVoting(
+    url, userId, AMAZON_CART_METHOD, undefined, undefined, undefined, undefined, productId, { allowAmazonCart: true }
+  );
+  const observation = scraped.amazonCartObservation;
+  if (!scraped.amazonCartRequired || !observation || scraped.needsReview ||
+      !scraped.price || scraped.price.price !== observation.price ||
+      scraped.price.currency !== observation.currency) {
+    const error: Error & { statusCode?: number } = new Error(
+      'The Amazon cart price could not be verified again. Refresh and try again.'
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+  if (scraped.price.price !== selectedPrice || scraped.price.currency !== selectedCurrency) {
+    const error: Error & { statusCode?: number } = new Error(
+      'The Amazon cart price changed. Refresh before confirming it.'
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+  return scraped;
+}
 
 export class ProductConfirmationService {
   /**
@@ -27,32 +84,41 @@ export class ProductConfirmationService {
       err.statusCode = 400;
       throw err;
     }
+    const cartRequired = isCartSelection(url, selectedMethod);
+    const verifiedCart = cartRequired
+      ? await verifyCartSelection(userId, url, selectedPrice, selectedCurrency)
+      : null;
 
     const product = await productRepository.create(
       userId,
       url,
-      name ? name.substring(0, 255) : null,
-      imageUrl || null,
+      verifiedCart ? verifiedCart.name?.substring(0, 255) || null : name ? name.substring(0, 255) : null,
+      verifiedCart ? verifiedCart.imageUrl || null : imageUrl || null,
       refresh_interval || FALLBACK_REFRESH_INTERVAL_SECONDS,
-      (stockStatus || 'unknown') as any,
-      'confirmed',
-      category || null
+      verifiedCart ? verifiedCart.stockStatus : stockStatus || 'unknown',
+      cartRequired ? null : 'confirmed',
+      category || null,
+      cartRequired ? AMAZON_CART_METHOD : null
     );
 
-    await productPersistenceService.saveScrapeResult(
+    const persistence = await productPersistenceService.saveScrapeResult(
       product.id, 
       userId, 
-      {
+      verifiedCart || {
         ...options,
         price: { price: selectedPrice, currency: selectedCurrency },
         memberPrice,
         originalPrice,
         selectedMethod,
-        html
+        html,
+        amazonCartRequired: false,
+        amazonCartObservation: undefined,
+        needsReview: false,
       } as any, 
       'manual-add',
       manualSelector
     );
+    rejectStaleSelection(persistence?.ignored);
 
     return await productRepository.findById(product.id, userId);
   }
@@ -65,31 +131,44 @@ export class ProductConfirmationService {
     if (!product) throw new Error('Product not found');
 
     const { selectedPrice, selectedCurrency, selectedMethod, memberPrice, originalPrice } = selection;
+    const cartRequired = isCartSelection(product.url, selectedMethod) ||
+      product.preferred_extraction_method === AMAZON_CART_METHOD;
     if (selectedPrice !== undefined && !selectedCurrency) {
       const err: Error & { statusCode?: number } = new Error('A currency is required when confirming a price');
       err.statusCode = 400;
       throw err;
     }
 
-    await productPersistenceService.saveScrapeResult(
+    if (cartRequired && selectedMethod !== AMAZON_CART_METHOD) {
+      const error: Error & { statusCode?: number } = new Error(
+        'This product requires a verified Amazon cart price. Refresh it before choosing a price.'
+      );
+      error.statusCode = 409;
+      throw error;
+    }
+    if (cartRequired && product.preferred_extraction_method !== AMAZON_CART_METHOD) {
+      await productPersistenceService.rememberAmazonCartRequirement(productId, userId);
+    }
+    const verifiedCart = cartRequired
+      ? await verifyCartSelection(userId, product.url, selectedPrice, selectedCurrency, productId)
+      : null;
+    const persistence = await productPersistenceService.saveScrapeResult(
       productId,
       userId,
-      {
+      verifiedCart || {
         ...selection,
         price: selectedPrice !== undefined ? { price: selectedPrice, currency: selectedCurrency } : undefined,
         memberPrice,
         originalPrice,
-        selectedMethod
+        selectedMethod,
+        amazonCartRequired: false,
+        amazonCartObservation: undefined,
+        needsReview: false,
       } as any,
-      'manual-confirm',
+      verifiedCart ? 'refresh' : 'manual-confirm',
       selection.selector
     );
-
-    // EXPLICITLY clear needs_price_review and update checking status
-    await productRepository.update(productId, userId, {
-      needs_price_review: false,
-      ai_status: 'confirmed'
-    });
+    rejectStaleSelection(persistence?.ignored);
 
     if (product.checking_paused) {
       logger.info(`Product ${productId} | Status | Unpausing checking after manual selection confirmation.`, 'Products', { product_id: productId });

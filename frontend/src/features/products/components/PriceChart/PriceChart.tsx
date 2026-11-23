@@ -28,6 +28,7 @@ interface PriceChartProps {
   prices: PriceHistory[];
   currency: string;
   targetPrice?: number | null;
+  cartPriceBasis?: boolean;
   onRangeChange?: (days: number | undefined) => void;
   /**
    * The range `prices` was loaded for, where the page owns that state; 0 is all
@@ -48,6 +49,7 @@ export default function PriceChart({
   prices,
   currency,
   targetPrice,
+  cartPriceBasis = false,
   onRangeChange,
   rangeDays,
 }: PriceChartProps) {
@@ -77,6 +79,7 @@ export default function PriceChart({
   const groupedData: {
     date: number;
     standard?: number;
+    earlier?: number;
     member?: number;
     original?: number;
   }[] = [];
@@ -102,10 +105,11 @@ export default function PriceChart({
     }
 
     if (type === 'standard' || type === 'deal-price') {
-      group.standard = priceVal;
-    } else if (type === 'member-price') {
+      if (cartPriceBasis && p.details?.price_basis !== 'amazon-cart-new') group.earlier = priceVal;
+      else group.standard = priceVal;
+    } else if (!cartPriceBasis && type === 'member-price') {
       group.member = priceVal;
-    } else if (type === 'original-price') {
+    } else if (!cartPriceBasis && type === 'original-price') {
       group.original = priceVal;
     }
   });
@@ -113,19 +117,20 @@ export default function PriceChart({
   // Calculate statistics using standard price values only
   const standardPrices = prices
     .filter((p) => !p.price_type || p.price_type === 'standard' || p.price_type === 'deal-price')
+    .filter((p) => !cartPriceBasis || p.details?.price_basis === 'amazon-cart-new')
     .map((p) => typeof p.price === 'string' ? parseFloat(p.price) : p.price)
     .filter((p) => !isNaN(p));
 
-  const minPrice = standardPrices.length > 0 ? Math.min(...standardPrices) : 0;
-  const maxPrice = standardPrices.length > 0 ? Math.max(...standardPrices) : 0;
+  const minPrice = standardPrices.length > 0 ? Math.min(...standardPrices) : null;
+  const maxPrice = standardPrices.length > 0 ? Math.max(...standardPrices) : null;
   const avgPrice = standardPrices.length > 0
     ? standardPrices.reduce((sum, p) => sum + p, 0) / standardPrices.length
-    : 0;
+    : null;
 
   const formatDate = (timestamp: number) =>
     formatDateWithOptions(timestamp, user?.locale, { month: 'short', day: 'numeric' });
 
-  const formatPrice = (value: number) => {
+  const formatPrice = (value: number | null) => {
     if (value === null || value === undefined || isNaN(value)) return 'N/A';
     return formatPriceUtil(value, currency, user?.locale);
   };
@@ -301,12 +306,12 @@ export default function PriceChart({
               }}
             />
             <Legend wrapperStyle={{ paddingTop: '10px' }} />
-            <ReferenceLine
+            {avgPrice !== null && <ReferenceLine
               y={avgPrice}
               stroke="#6366f1"
               strokeDasharray="5 5"
               label={{ value: 'Average', fill: '#6366f1', position: 'top', fontSize: 10 }}
-            />
+            />}
             {targetPrice !== undefined && targetPrice !== null && (
               <ReferenceLine
                 y={targetPrice}
@@ -318,14 +323,24 @@ export default function PriceChart({
             <Line
               type="monotone"
               dataKey="standard"
-              name="Standard Price"
+              name={cartPriceBasis ? 'New item cart price' : 'Standard Price'}
               stroke="#6366f1"
               strokeWidth={2}
               connectNulls={true}
               dot={{ fill: '#6366f1', strokeWidth: 0, r: 3 }}
               activeDot={{ r: 5, stroke: '#6366f1', strokeWidth: 2, fill: 'white' }}
             />
-            <Line
+            {cartPriceBasis && <Line
+              type="monotone"
+              dataKey="earlier"
+              name="Earlier price (unverified condition)"
+              stroke="#94a3b8"
+              strokeWidth={1.5}
+              strokeDasharray="4 4"
+              connectNulls={true}
+              dot={{ fill: '#94a3b8', strokeWidth: 0, r: 3 }}
+            />}
+            {!cartPriceBasis && <Line
               type="monotone"
               dataKey="member"
               name="Member Price"
@@ -335,8 +350,8 @@ export default function PriceChart({
               connectNulls={true}
               dot={{ fill: '#10b981', strokeWidth: 0, r: 3 }}
               activeDot={{ r: 5, stroke: '#10b981', strokeWidth: 2, fill: 'white' }}
-            />
-            <Line
+            />}
+            {!cartPriceBasis && <Line
               type="monotone"
               dataKey="original"
               name="Original Price (RRP)"
@@ -346,7 +361,7 @@ export default function PriceChart({
               connectNulls={true}
               dot={{ fill: '#f97316', strokeWidth: 0, r: 2 }}
               activeDot={{ r: 4, stroke: '#f97316', strokeWidth: 1, fill: 'white' }}
-            />
+            />}
           </LineChart>
         </ResponsiveContainer>
       </div>

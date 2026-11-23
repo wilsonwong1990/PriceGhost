@@ -4,6 +4,7 @@ import {
   ProductWithLatestPrice, 
 } from '../../../../models/types';
 import { ITEM_ALERT_COLUMNS, ITEM_ALERT_JOIN, withItemAlertSettings } from './item-alert-settings';
+import { CURRENT_PRICE_BASIS, HISTORY_PRICE_BASIS } from './price-basis';
 
 export const productQueryCoreRepository = {
   findByUserId: async (userId: number): Promise<ProductWithLatestPrice[]> => {
@@ -19,9 +20,9 @@ export const productQueryCoreRepository = {
        JOIN users u ON u.id = p.user_id
        ${ITEM_ALERT_JOIN}
        LEFT JOIN LATERAL (
-         SELECT price, currency, ai_status FROM price_history
-         WHERE product_id = p.id AND price_type = 'standard'
-         ORDER BY recorded_at DESC
+         SELECT price, currency, ai_status FROM price_history history
+         WHERE history.product_id = p.id AND history.price_type = 'standard' AND ${CURRENT_PRICE_BASIS}
+         ORDER BY recorded_at DESC, history.id DESC
          LIMIT 1
        ) ph ON true
        -- Rates are stored as EUR<->X pairs only; cross pairs triangulate via EUR.
@@ -76,25 +77,28 @@ export const productQueryCoreRepository = {
                 ELSE ph.price * er.rate
               END as converted_price,
               COALESCE(rc.name, rc.domain) as retailer_name,
-              (SELECT MIN(price) FROM price_history WHERE product_id = p.id AND price_type = 'standard') as min_price,${ITEM_ALERT_COLUMNS}
+              (SELECT MIN(price) FROM price_history history WHERE history.product_id = p.id
+               AND history.price_type = 'standard' AND ${HISTORY_PRICE_BASIS}) as min_price,${ITEM_ALERT_COLUMNS}
        FROM products p
        JOIN users u ON u.id = p.user_id
        ${ITEM_ALERT_JOIN}
        LEFT JOIN LATERAL (
-         SELECT price, currency, ai_status FROM price_history
-         WHERE product_id = p.id AND price_type = 'standard'
-         ORDER BY recorded_at DESC
+         SELECT price, currency, ai_status FROM price_history history
+         WHERE history.product_id = p.id AND history.price_type = 'standard' AND ${CURRENT_PRICE_BASIS}
+         ORDER BY recorded_at DESC, history.id DESC
          LIMIT 1
        ) ph ON true
        LEFT JOIN LATERAL (
          SELECT price FROM price_history
          WHERE product_id = p.id AND price_type = 'member-price'
+           AND p.preferred_extraction_method IS DISTINCT FROM 'amazon-cart'
          ORDER BY recorded_at DESC
          LIMIT 1
        ) ph_m ON true
        LEFT JOIN LATERAL (
          SELECT price FROM price_history
          WHERE product_id = p.id AND price_type = 'original-price'
+           AND p.preferred_extraction_method IS DISTINCT FROM 'amazon-cart'
          ORDER BY recorded_at DESC
          LIMIT 1
        ) ph_o ON true

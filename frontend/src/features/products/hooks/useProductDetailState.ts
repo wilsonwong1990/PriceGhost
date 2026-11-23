@@ -79,7 +79,18 @@ export function useProductDetailState(
       // Reload the range the chart is currently showing, not a hardcoded month.
       fetchData();
       if (onUpdated) onUpdated(productId, data);
-    }
+    },
+    onRefreshUnverified: () => {
+      setProduct(current => current ? {
+        ...current,
+        current_price: null,
+        currency: null,
+        converted_price: null,
+        stock_status: 'unknown',
+        preferred_extraction_method: 'amazon-cart',
+        unavailable_reason: 'amazon_cart_price_unavailable',
+      } : current);
+    },
   });
 
   const fetchData = (days: number = historyDays) => runFetch(async () => {
@@ -241,6 +252,7 @@ export function useProductDetailState(
     showDeleteConfirm, setShowDeleteConfirm,
     handleRefresh: () => handleRefreshAction(productId, product?.name),
     handleRescan: () => handleRescanAction(productId),
+    handleAmazonCartScan: () => handleRescanAction(productId, true),
     handleDelete: () => handleDeleteAction(productId, product?.name),
     handleResumeMonitoring: () => handleTogglePauseAction(productId, false, product?.name),
     handlePriceSelected,

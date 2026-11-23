@@ -48,6 +48,7 @@ function ProductDetailContent({ children }: { children: ReactNode }) {
         url={state.priceReviewData?.url || ''}
         category={state.product.category || null}
         reviewReason={state.priceReviewData?.reviewReason}
+        amazonCartRequired={state.priceReviewData?.amazonCartRequired}
       />
     </Layout>
   );

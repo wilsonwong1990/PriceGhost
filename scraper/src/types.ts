@@ -30,6 +30,8 @@ export interface ScrapeOptions {
   /** Challenge auto-resolve attempts. Default 2, 0 disables the loop (issue #235). */
   interstitialRetries?: number;
   acceptLanguage?: string;
+  /** Use a separate, anonymous context for an Amazon product/cart observation. */
+  amazonCartMode?: 'auto' | 'required';
 }
 
 export interface LogContext {
@@ -67,6 +69,8 @@ export interface BrowserSession {
 export interface ScrapeResult {
   html: string;
   screenshotBase64: string | null;
+  finalUrl?: string;
+  amazonCart?: AmazonCartResult;
   /**
    * A challenge interstitial was recognised after navigation (issue #255).
    *
@@ -84,6 +88,20 @@ export interface ScrapeResult {
    */
   challengeUnresolved: boolean;
 }
+
+export type AmazonCartResult =
+  | { required: false }
+  | { required: true; status: 'unavailable' }
+  | {
+      required: true;
+      status: 'verified';
+      asin: string;
+      marketplace: 'amazon.com' | 'amazon.com.au';
+      condition: 'new';
+      price: number;
+      currency: 'USD' | 'AUD';
+      metadata: { name: string | null; imageUrl: string | null };
+    };
 
 export type ScraperPage = Page;
 

@@ -2,10 +2,13 @@ import { logger } from '../../../utils/system/logger';
 import { settingsCache } from '../../../utils/cache';
 import {
   fetchRemoteHtml,
+  fetchRemoteScrape,
+  type RemoteScrapeResult,
   PageNotAvailableError,
   resolveUserAgent
 } from '../transport';
 import { RetailerConfig } from '../../../models';
+import { scrubUrlCredentials } from '../../../utils/system/logging/scrubber';
 
 /**
  * What the browser-scraper service is asked for.
@@ -35,6 +38,7 @@ export interface RemoteScraperOptions {
   interstitialWaitMs?: number;
   /** How many auto-resolve attempts to make before returning the wall (issue #235). */
   interstitialRetries?: number;
+  amazonCartMode?: 'auto' | 'required';
 }
 
 export interface RemoteAcquisitionOptions {
@@ -44,6 +48,7 @@ export interface RemoteAcquisitionOptions {
   productId?: number;
   extractionSteps: string[];
   requestId?: string;
+  onFinalUrl?: (url: string) => void;
 }
 
 /**
@@ -69,60 +74,16 @@ export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Prom
   }
 
   try {
-    const useProxy = domainConfig?.use_proxy || false;
-
     logger.info(`Scraper | Remote | Requesting ${domain} (Browser: true)`, 'Scraper');
-    extractionSteps.push(`Scraper | Remote | Requesting via ${rsUrl}`);
-    
-    const isDiscovery = !productId;
-    const currentProxy = useProxy ? await settingsCache.getScraperProxy() : undefined;
-
-    // Always resolve a User-Agent, never only the retailer's override (issue
-    // #67). This branch used to set one *only* when the retailer had an
-    // override, with no fall-through to `resolveUserAgent()` -- which
-    // `acquisition/fallback.ts` has always done. So a `use_browser_scraper`
-    // retailer with no override sent none, the scraper service passed no
-    // `--user-agent` to Chromium, and the page went out announcing whichever
-    // Chromium build happens to be in the container image.
-    //
-    // The stealth plugin does rewrite `HeadlessChrome/` to `Chrome/`, so this
-    // is not the difference between announcing headless and not. What it fixes
-    // is the identity drifting between the two paths for one retailer: the
-    // HTTP attempt announces the configured Chrome, and the browser attempt
-    // announced the container's Chromium version, on its own platform, with
-    // client hints derived from that. Presenting two different browsers for one
-    // product is the same fault as presenting two different versions in one
-    // request -- see transport/user-agent.ts.
-    const remoteOptions: RemoteScraperOptions = {
-      productId,
-      isDiscovery,
-      requestId,
-      userAgent: await resolveUserAgent(domainConfig?.user_agent),
-      challengePatterns: await settingsCache.getGenericChallengePhrases(),
-      delay: await settingsCache.getBrowserDelay(),
-      timeout: await settingsCache.getBrowserTimeout(),
-    };
-
-    if (currentProxy) {
-      remoteOptions.useProxy = true;
-      remoteOptions.proxyUrl = currentProxy;
-    }
-
-    // Referrer policy: retailer config, then the system default, then none —
-    // never a fabricated random one (issue #44).
-    if (domainConfig?.referrer) {
-      remoteOptions.referrer = domainConfig.referrer;
-    } else {
-      const defaultReferrer = await settingsCache.getDefaultReferrer();
-      if (defaultReferrer) remoteOptions.referrer = defaultReferrer;
-    }
+    extractionSteps.push(`Scraper | Remote | Requesting via ${scrubUrlCredentials(rsUrl)}`);
+    const remoteOptions = await buildRemoteOptions(options);
     
     // "Custom" now means the retailer's own override; the resolved system
     // default is no longer indistinguishable from sending nothing at all.
     logger.debug(`Scraper | Remote | Details | UA: ${remoteOptions.userAgent}, Proxy: ${remoteOptions.proxyUrl || 'None'}, Ref: ${remoteOptions.referrer || 'None'}`, 'Scraper');
     extractionSteps.push(`Scraper | Remote | UA: ${domainConfig?.user_agent ? 'Custom' : 'Default'} | Proxy: ${remoteOptions.proxyUrl ? 'Yes' : 'No'}`);
     
-    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions);
+    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions, options.onFinalUrl);
     extractionSteps.push(`Scraper | Remote | Success`);
     return html;
   } catch (e) {
@@ -136,4 +97,51 @@ export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Prom
     logger.warn(`Scraper | Remote | Failed for ${domain} (Browser required): ${message}`, 'Scraper');
     throw e;
   }
+}
+
+async function buildRemoteOptions(options: RemoteAcquisitionOptions, amazonCartMode?: 'auto' | 'required'): Promise<RemoteScraperOptions> {
+  const { domainConfig, productId, requestId } = options;
+  const remoteOptions: RemoteScraperOptions = {
+    productId,
+    isDiscovery: !productId,
+    requestId,
+    userAgent: await resolveUserAgent(domainConfig?.user_agent),
+    challengePatterns: await settingsCache.getGenericChallengePhrases(),
+    delay: await settingsCache.getBrowserDelay(),
+    timeout: await settingsCache.getBrowserTimeout(),
+  };
+  const proxy = domainConfig?.use_proxy ? await settingsCache.getScraperProxy() : undefined;
+  if (proxy) {
+    remoteOptions.useProxy = true;
+    remoteOptions.proxyUrl = proxy;
+  }
+  if (amazonCartMode) {
+    remoteOptions.amazonCartMode = amazonCartMode;
+  } else {
+    remoteOptions.referrer = domainConfig?.referrer || await settingsCache.getDefaultReferrer() || undefined;
+  }
+  return remoteOptions;
+}
+
+/** The dedicated endpoint cannot be mistaken for an older, unguarded scraper. */
+export async function acquireRemoteAmazon(
+  options: RemoteAcquisitionOptions,
+  mode: 'auto' | 'required',
+): Promise<RemoteScrapeResult | null> {
+  if (options.domainConfig?.use_proxy && !options.domainConfig.use_browser_scraper) {
+    options.extractionSteps.push('Amazon | Cart | Enable the browser scraper for this proxied retailer before checking the cart');
+    logger.warn('Amazon cart verification requires the browser scraper to be enabled for a proxied retailer', 'Scraper', {
+      requestId: options.requestId,
+    });
+    return null;
+  }
+  const rsUrl = await settingsCache.getRemoteScraperUrl();
+  if (!rsUrl) return null;
+  const remoteOptions = await buildRemoteOptions(options, mode);
+  if (options.domainConfig?.use_proxy && !remoteOptions.proxyUrl) {
+    options.extractionSteps.push('Amazon | Cart | Configured proxy is unavailable');
+    logger.warn('Amazon cart verification requires the configured proxy', 'Scraper', { requestId: options.requestId });
+    return null;
+  }
+  return fetchRemoteScrape(options.url, rsUrl, remoteOptions);
 }

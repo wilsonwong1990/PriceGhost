@@ -1,6 +1,7 @@
 import React from 'react';
 import ProductBadges from '../../components/ProductBadges';
 import { formatPrice, formatDate } from '../../../../utils/format';
+import { isAmazonCartStockUnverified, stockStatusForDisplay } from '../../../../utils/availability';
 
 interface ProductImageProps {
   product: any;
@@ -76,8 +77,9 @@ export const ProductPriceStatus: React.FC<ProductPriceStatusProps> = ({
   product,
   user,
 }) => {
-  const isOutOfStock = product.stock_status === 'out_of_stock' || product.stock_status === 'not_available';
-  const isPreOrder = product.stock_status === 'pre_order';
+  const stockStatus = stockStatusForDisplay(product);
+  const isOutOfStock = stockStatus === 'out_of_stock' || stockStatus === 'not_available';
+  const isPreOrder = stockStatus === 'pre_order';
   const fallbackLabel = isPreOrder ? 'TBD' : 'Price unavailable';
   const conversionRequested = Boolean(user?.currency && product.currency && user.currency !== product.currency);
   const conversionDetails = product.conversion_rate_date
@@ -88,7 +90,7 @@ export const ProductPriceStatus: React.FC<ProductPriceStatusProps> = ({
     <div className="product-detail-info-right">
       <ProductBadges 
         product={product} 
-        showAiStatus={product.stock_status !== 'out_of_stock' && product.stock_status !== 'pre_order' && product.stock_status !== 'not_available'} 
+        showAiStatus={!isAmazonCartStockUnverified(product) && !isOutOfStock && !isPreOrder}
         showInStock={true} 
       />
 
@@ -120,6 +122,13 @@ export const ProductPriceStatus: React.FC<ProductPriceStatusProps> = ({
           </span>
         )}
       </div>
+      {product.preferred_extraction_method === 'amazon-cart' && product.unavailable_reason && (
+        <p className="price-subtext">
+          {product.current_price == null
+            ? 'A current new-item cart price could not be verified.'
+            : 'Showing the last verified cart price; the latest check did not succeed.'}
+        </p>
+      )}
 
       {/* Price change percentage removed temporarily due to inconsistent history data */}
     </div>

@@ -76,6 +76,7 @@ These parameters enable and coordinate Single Sign-On integrations. Detailed set
 | `SMTP_FALLBACK_FROM` | The sender email address used for system fallback notifications. | *(Empty)* |
 | `ADMIN_ALERT_EMAIL` | The recipient email address where database-health alert logs are forwarded on failure. | *(Empty)* |
 | `COPILOT_TELEMETRY_DISABLED` | Set to `true` to disable the GitHub Copilot runtime's own authentication telemetry. Only used by the GitHub Copilot AI provider. It is set to `true` automatically when `DISABLE_TELEMETRY`, `DO_NOT_TRACK` or `TELEMETRY_ENABLED=false` opts the application out, so it only needs setting (under the backend service's `environment`) to opt the runtime out on its own. The runtime receives this variable, `PATH`, and proxy and CA settings, and nothing else from the backend environment. | unset |
+| `AMAZON_CART_SCRAPER_TOKEN` | Enables opt-in Amazon guest-cart checks. Set the same random secret of at least 32 bytes on the backend and browser scraper; generate one with `openssl rand -base64 48`. Keep the scraper endpoint private and use an isolated trusted network or authenticated TLS: ordinary HTTP does not encrypt this token. Missing, short, or mismatched values disable cart checks. | *(Empty)* |
 
 ---
 
