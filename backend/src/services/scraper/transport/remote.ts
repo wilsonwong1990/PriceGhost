@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import axios from 'axios';
 import { logger } from '../../../utils/system/logger';
 import { PageNotAvailableError } from './errors';
+import type { RetailerBrowserEngine } from '../../../models/types/retailer';
 
 /**
  * Budget assumed when a caller sends no `timeout`.
@@ -57,7 +58,7 @@ export class BrowserEngineMismatchError extends Error {
 /**
  * Fetches HTML via the remote scraper instance (ruski).
  */
-export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, options: any = {}): Promise<string> {
+export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, options: any = {}, onEngine?: (engine: RetailerBrowserEngine | undefined) => void): Promise<string> {
   const maxRetries = 3;
   let retryCount = 0;
 
@@ -119,6 +120,7 @@ export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, opt
         latency
       });
 
+      onEngine?.(servedEngine === 'chromium' || servedEngine === 'firefox' ? servedEngine : undefined);
       return response.data.html || '';
 
     } catch (error: any) {

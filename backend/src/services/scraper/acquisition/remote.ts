@@ -50,6 +50,7 @@ export interface RemoteAcquisitionOptions {
   productId?: number;
   extractionSteps: string[];
   requestId?: string;
+  onEngine?: (engine: RetailerBrowserEngine | undefined) => void;
 }
 
 /**
@@ -65,7 +66,7 @@ export interface RemoteAcquisitionOptions {
  * browser is how a BLOCKED page gets mistaken for a product page.
  */
 export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Promise<string | null> {
-  const { url, domain, domainConfig, productId, extractionSteps, requestId } = options;
+  const { url, domain, domainConfig, productId, extractionSteps, requestId, onEngine } = options;
   
   const rsUrl = await settingsCache.getRemoteScraperUrl();
   if (!rsUrl) {
@@ -132,7 +133,7 @@ export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Prom
     logger.debug(`Scraper | Remote | Details | UA: ${remoteOptions.userAgent}, Proxy: ${remoteOptions.proxyUrl || 'None'}, Ref: ${remoteOptions.referrer || 'None'}`, 'Scraper');
     extractionSteps.push(`Scraper | Remote | UA: ${domainConfig?.user_agent ? 'Custom' : 'Default'} | Proxy: ${remoteOptions.proxyUrl ? 'Yes' : 'No'} | Engine: ${remoteOptions.browserEngine === 'firefox' ? 'Firefox' : 'Chromium'}`);
     
-    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions);
+    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions, onEngine);
     extractionSteps.push(`Scraper | Remote | Success`);
     return html;
   } catch (e) {

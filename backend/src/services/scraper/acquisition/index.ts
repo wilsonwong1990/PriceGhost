@@ -2,6 +2,8 @@ import { load, type CheerioAPI } from 'cheerio';
 import { logger } from '../../../utils/system/logger';
 import { detectBotChallenge, PageNotAvailableError } from '../transport';
 import { RetailerConfig } from '../../../models';
+import type { AcquisitionMetadata } from '../../../types/scraper';
+import type { RetailerBrowserEngine } from '../../../models/types/retailer';
 
 import { acquireRemoteHtml } from './remote';
 import { acquireStandardHtml, BotChallengeError } from './standard';
@@ -22,6 +24,7 @@ export interface AcquisitionResult {
   challengeReason: string | null;
   usedRemoteFallback: boolean;
   learnedFlags: any;
+  acquisition?: AcquisitionMetadata;
 }
 
 export async function acquireHtml(options: AcquisitionOptions): Promise<AcquisitionResult> {
@@ -30,6 +33,9 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
   let learnedFlags: any = {};
   let challengeReason: string | null = null;
   let usedRemoteFallback = false;
+  let browserEngine: RetailerBrowserEngine | undefined;
+  let acquisition: AcquisitionMetadata | undefined;
+  const onEngine = (engine: RetailerBrowserEngine | undefined) => { browserEngine = engine; };
 
   const useBrowserScraper = domainConfig?.use_browser_scraper || false;
 
@@ -44,12 +50,13 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
   if (useBrowserScraper) {
     usedRemoteFallback = true;
     learnedFlags = { use_browser_scraper: true };
-    const remoteHtml = await acquireRemoteHtml(options);
+    const remoteHtml = await acquireRemoteHtml({ ...options, onEngine });
     if (remoteHtml === null) {
       remoteScraperUnavailable = true;
       usedRemoteFallback = false;
     } else if (remoteHtml) {
       html = remoteHtml;
+      acquisition = { mode: 'browser', browserEngine };
     }
   }
 
@@ -64,6 +71,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
         extractionSteps,
         requestId
       });
+      if (html) acquisition = { mode: 'http' };
     } catch (e) {
       if (e instanceof BotChallengeError) {
         challengeReason = e.message;
@@ -91,7 +99,8 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
       domain,
       productId,
       extractionSteps,
-      challengeReason
+      challengeReason,
+      onEngine
       // No retailer override to pass: this branch only runs when the domain has
       // no config, so the system default is the right identity -- and is the
       // one the HTTP attempt just used.
@@ -100,7 +109,8 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
     if (fallbackResult) {
       return {
         ...fallbackResult,
-        usedRemoteFallback: true
+        usedRemoteFallback: true,
+        acquisition: { mode: 'browser', browserEngine }
       };
     }
     // Deliberately no `learnedFlags = { use_browser_scraper: true }` here.
@@ -114,7 +124,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
     // stay self-healing on the next scrape.
   }
 
-  return { html, $, challengeReason, usedRemoteFallback, learnedFlags };
+  return { html, $, challengeReason, usedRemoteFallback, learnedFlags, acquisition };
 }
 
 function checkSoft404($: CheerioAPI, html: string, extractionSteps: string[]) {

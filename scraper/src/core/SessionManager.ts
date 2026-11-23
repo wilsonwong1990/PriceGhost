@@ -12,7 +12,7 @@ import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { isProcessGone, isSessionResponsive, type ProbeProcess } from './health.js';
 import { findReusableSession } from './pool.js';
-import { BrowserLaunchError, buildFirefoxPrefs, DEFAULT_BROWSER_ENGINE, shouldApplyUserAgentToFirefox, type BrowserEngine } from './engine.js';
+import { BrowserLaunchError, TargetSessionEngineMismatchError, buildFirefoxPrefs, DEFAULT_BROWSER_ENGINE, shouldApplyUserAgentToFirefox, type BrowserEngine } from './engine.js';
 import { scrubUrlCredentials } from '../utils/scrub.js';
 
 interface PuppeteerExtra {
@@ -498,15 +498,36 @@ function reserveSession(session: BrowserSession): BrowserSession {
   return session;
 }
 
-async function awaitSessionLaunch(session: BrowserSession): Promise<BrowserSession | null> {
-  if (session.launchPromise) {
+async function awaitSessionLaunch(session: BrowserSession, signal?: AbortSignal): Promise<BrowserSession | null> {
+  const launch = session.launchPromise;
+  if (launch) {
+    let onAbort: (() => void) | undefined;
     try {
-      await session.launchPromise;
+      const aborted = new Promise<'aborted'>(resolve => {
+        onAbort = () => resolve('aborted');
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      const outcome = await Promise.race([launch.then(() => 'launched' as const), aborted]);
+      if (outcome === 'aborted') {
+        session.activePages--;
+        session.totalScrapes--;
+        void launch.then(() => {
+          if (session.activePages === 0 && sessions.includes(session) && !session.idleTimer) {
+            session.idleTimer = setTimeout(() => {
+              if (session.activePages === 0) void closeSession(session);
+            }, IDLE_TIMEOUT);
+          }
+        }, () => {});
+        return null;
+      }
     } catch (e) {
       session.activePages--;
       session.totalScrapes--;
       if (session.browserEngine === 'firefox') throw new BrowserLaunchError(session.browserEngine, e);
       return null;
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
     }
   }
   return session;
@@ -519,7 +540,7 @@ let poolSelection: Promise<void> = Promise.resolve();
 /**
  * Finds or creates an available browser session.
  */
-export async function getBrowserSession(options: ScrapeOptions = {}): Promise<BrowserSession | null> {
+export async function getBrowserSession(options: ScrapeOptions = {}, signal?: AbortSignal): Promise<BrowserSession | null> {
   const reqProxy = options.proxyUrl || null;
   const reqEngine = options.browserEngine || DEFAULT_BROWSER_ENGINE;
   const requestedUA = options.userAgent || null;
@@ -535,11 +556,11 @@ export async function getBrowserSession(options: ScrapeOptions = {}): Promise<Br
   await previous;
   let selected: BrowserSession | null;
   try {
-    selected = await selectSession(reqProxy, reqUA, reqEngine, forceNew, targetId);
+    selected = signal?.aborted ? null : await selectSession(reqProxy, reqUA, reqEngine, forceNew, targetId, signal);
   } finally {
     unlock();
   }
-  return selected ? awaitSessionLaunch(selected) : null;
+  return selected ? awaitSessionLaunch(selected, signal) : null;
 }
 
 async function selectSession(
@@ -547,15 +568,18 @@ async function selectSession(
   reqUA: string | null,
   reqEngine: BrowserEngine,
   forceNew: boolean,
-  targetId: string | null
+  targetId: string | null,
+  signal?: AbortSignal
 ): Promise<BrowserSession | null> {
   // 1. Direct Targeting by Session ID (Debug/Control)
   if (targetId) {
-    const target = sessions.find(s => s.id === targetId && !s.tainted && s.activePages < MAX_PAGES_PER_BROWSER && s.totalScrapes < MAX_SCRAPES_PER_BROWSER && (!s.browser || s.browser.connected));
-    if (target && (!target.browser || (await isSessionResponsive(target))) && sessions.includes(target) && !target.tainted) {
+    const namedSession = sessions.find(s => s.id === targetId);
+    if (namedSession && namedSession.browserEngine !== reqEngine) throw new TargetSessionEngineMismatchError();
+    const target = sessions.find(s => s.id === targetId && s.browserEngine === reqEngine && !s.tainted && s.activePages < MAX_PAGES_PER_BROWSER && s.totalScrapes < MAX_SCRAPES_PER_BROWSER && (!s.browser || s.browser.connected));
+    if (target && (!target.browser || (await isSessionResponsive(target))) && sessions.includes(target) && !target.tainted && !signal?.aborted) {
       return reserveSession(target);
     }
-    if (target && target.activePages === 0 && sessions.includes(target)) {
+    if (target && !signal?.aborted && target.activePages === 0 && sessions.includes(target)) {
       markSessionTainted(target, 'CDP liveness probe failed');
       if (target.activePages === 0) await closeSession(target);
     }
@@ -580,6 +604,7 @@ async function selectSession(
       },
     });
 
+    if (signal?.aborted) return null;
     if (session && sessions.includes(session) && !session.tainted) return reserveSession(session);
   }
 
@@ -592,6 +617,7 @@ async function selectSession(
     } catch (e) {
       throw new BrowserLaunchError(reqEngine, e);
     }
+    if (signal?.aborted) return null;
   }
 
   // 3. Handle Pool Capacity & Recycling
@@ -599,7 +625,8 @@ async function selectSession(
     // Look for an idle session to recycle, preferring one already marked
     // unusable over a healthy one (issue #254).
     const idleSession =
-      sessions.find(s => s.activePages === 0 && s.tainted) ?? sessions.find(s => s.activePages === 0);
+      sessions.find(s => s.activePages === 0 && !s.launchPromise && s.tainted) ??
+      sessions.find(s => s.activePages === 0 && !s.launchPromise);
     if (idleSession) {
       log(`Recycling idle session ${idleSession.id} to accommodate new request (ForceNew: ${forceNew})`, 'INFO');
       await closeSession(idleSession);
@@ -611,5 +638,6 @@ async function selectSession(
   }
 
   // 4. Create New Session
+  if (signal?.aborted) return null;
   return reserveSession(createNewSession(reqProxy, reqUA, reqEngine));
 }

@@ -6,8 +6,8 @@ export class SessionService {
   /**
    * Acquires a browser session based on the provided options.
    */
-  static acquireSession(options: ScrapeOptions): Promise<BrowserSession | null> {
-    return getBrowserSession(options);
+  static acquireSession(options: ScrapeOptions, signal?: AbortSignal): Promise<BrowserSession | null> {
+    return getBrowserSession(options, signal);
   }
 
   /**

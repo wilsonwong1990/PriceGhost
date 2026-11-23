@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { sessions } from '../../../scraper/src/core/SessionManager';
 import type { BrowserSession, ScrapeResult } from '../../../scraper/src/types';
-import { BrowserLaunchError } from '../../../scraper/src/core/engine';
+import { BrowserLaunchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
 
 /**
  * The scrape route's session lifecycle (issues #254, #255).
@@ -21,7 +21,7 @@ const { scrape, releaseSession, acquireSession, acquired } = vi.hoisted(() => {
   return {
     scrape: vi.fn(),
     releaseSession: vi.fn().mockResolvedValue(undefined),
-    acquireSession: vi.fn(async () => acquired.session),
+    acquireSession: vi.fn(async (_options: unknown, _signal: AbortSignal) => acquired.session),
     acquired,
   };
 });
@@ -50,7 +50,7 @@ const fakeSession = (): BrowserSession => ({
   browser: null,
   launchPromise: null,
   activePages: 1,
-  totalScrapes: 0,
+  totalScrapes: 1,
   idleTimer: null,
   proxyUrl: 'http://scraper:pa55word@192.168.50.200:8888',
   userAgent: null,
@@ -116,6 +116,22 @@ describe('a completed scrape keeps its session (issue #254)', () => {
 });
 
 describe('a wedged scrape retires its session (issue #254)', () => {
+  it('does not scrape and releases a reservation after disconnect during acquisition', async () => {
+    const abort = new AbortController();
+    let finish!: (session: BrowserSession | null) => void;
+    acquireSession.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const inflight = postScrape({ url: 'https://example.test/product' }, { signal: abort.signal }).catch(() => undefined);
+    await vi.waitFor(() => expect(acquireSession).toHaveBeenCalled());
+    abort.abort();
+    await vi.waitFor(() => expect(acquireSession.mock.calls[0][1].aborted).toBe(true));
+    finish(acquired.session);
+    await inflight;
+    await vi.waitFor(() => expect(acquired.session?.activePages).toBe(0));
+    expect(acquired.session?.totalScrapes).toBe(0);
+    expect(acquired.session?.tainted).toBe(false);
+    expect(scrape).not.toHaveBeenCalled();
+    if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
+  });
   it('discards the session when the client disconnects mid-scrape', async () => {
     const abort = new AbortController();
     let resolveScrape: (() => void) | undefined;
@@ -215,6 +231,12 @@ describe('the route never logs proxy credentials', () => {
 });
 
 describe('the route resolves the browser engine before taking a session', () => {
+  it('returns a conflict for a targeted session of another engine', async () => {
+    acquireSession.mockRejectedValueOnce(new TargetSessionEngineMismatchError());
+    const response = await postScrape({ url: 'https://example.test/product', options: { browserEngine: 'firefox', sessionId: 'target' } });
+    expect(response.status).toBe(409);
+    expect(scrape).not.toHaveBeenCalled();
+  });
   it('rejects object values without invoking their toString property', async () => {
     const response = await postScrape({
       url: 'https://example.test/product',
@@ -242,7 +264,7 @@ describe('the route resolves the browser engine before taking a session', () => 
 
     await postScrape({ url: 'https://www.bigw.com.au/product/x/p/1' });
 
-    expect(acquireSession).toHaveBeenCalledWith(expect.objectContaining({ browserEngine: 'chromium' }));
+    expect(acquireSession).toHaveBeenCalledWith(expect.objectContaining({ browserEngine: 'chromium' }), expect.any(AbortSignal));
     if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
   });
 

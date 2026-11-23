@@ -22,11 +22,9 @@ export function useDebugScraper() {
   const [globalSettings, setGlobalSettings] = useState<SystemSettings | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
-  // The browser settings the displayed result was actually scraped with, so
-  // saving cannot persist controls edited after (or during) that run.
-  const [resultBrowserSettings, setResultBrowserSettings] = useState<{
-    use_browser_scraper?: boolean;
-    browser_engine?: RetailerBrowserEngine;
+  const [resultContext, setResultContext] = useState<{
+    url: string;
+    acquisition?: { mode: 'browser' | 'http' | 'bypass'; browserEngine?: RetailerBrowserEngine };
   } | null>(null);
   
   // Permissions
@@ -188,7 +186,7 @@ export function useDebugScraper() {
 
     setIsLoading(true);
     setResult(null);
-    setResultBrowserSettings(null);
+    setResultContext(null);
 
     let processedUrl = url.trim();
     if (!/^https?:\/\//i.test(processedUrl)) {
@@ -251,12 +249,6 @@ export function useDebugScraper() {
     }
 
     let finalConfig: Partial<RetailerConfig> | undefined = undefined;
-    const runBrowserSettings = useOverride
-      ? {
-          use_browser_scraper: config.use_browser_scraper,
-          browser_engine: config.use_browser_scraper ? config.browser_engine || 'chromium' : undefined,
-        }
-      : {};
     if (useOverride) {
       finalConfig = {
         ...config,
@@ -276,7 +268,7 @@ export function useDebugScraper() {
     try {
       const res = await RetailerAdminService.debugExtract(processedUrl, finalConfig, mode, returnHtml, useAI, forceAI);
       setResult(res);
-      setResultBrowserSettings(runBrowserSettings);
+      setResultContext({ url: processedUrl, acquisition: res.acquisition });
       
       // Save to history
       try {
@@ -305,7 +297,7 @@ export function useDebugScraper() {
       forceAI, setForceAI,
       isLoading,
       result, setResult,
-      resultBrowserSettings,
+      resultContext,
       isEnabled,
       recentUrls,
       isFetchingConfig,

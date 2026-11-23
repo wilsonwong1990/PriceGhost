@@ -54,17 +54,23 @@ export default function Debug() {
   };
 
   const handleSaveToRetailer = async () => {
-    if (!state.result || !state.url) return;
+    if (!state.result || !state.resultContext) return;
+    if (state.url !== state.resultContext.url) {
+      showToast('Run extraction again before saving a different URL', 'error');
+      return;
+    }
     try {
-      const urlObj = new URL(state.url);
+      const urlObj = new URL(state.resultContext.url);
       const domain = urlObj.hostname.replace('www.', '');
 
       await RetailerAdminService.upsertRetailer({
         domain,
         name: state.result.retailerName,
         use_proxy: state.config.use_proxy,
-        use_browser_scraper: state.resultBrowserSettings?.use_browser_scraper,
-        browser_engine: state.resultBrowserSettings?.browser_engine,
+        use_browser_scraper: state.resultContext.acquisition?.mode === 'browser' ? true : undefined,
+        browser_engine: state.resultContext.acquisition?.mode === 'browser'
+          ? state.resultContext.acquisition.browserEngine
+          : undefined,
         user_agent: state.config.user_agent,
         price_selectors: state.tempPriceSelectors,
         retailer_name_selectors: state.tempRetailerNameSelectors,

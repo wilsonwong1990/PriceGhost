@@ -91,8 +91,32 @@ export class ScraperService {
 
     try {
       if (!session.browser) throw new Error('Browser not available in session');
+      if (abortSignal?.aborted) return null;
       
-      page = await session.browser.newPage();
+      const pendingPage = session.browser.newPage();
+      if (abortSignal) {
+        let onAbort!: () => void;
+        const aborted = new Promise<null>(resolve => {
+          onAbort = () => resolve(null);
+          if (abortSignal.aborted) onAbort();
+          else abortSignal.addEventListener('abort', onAbort, { once: true });
+        });
+        try {
+          page = await Promise.race([pendingPage, aborted]);
+        } finally {
+          abortSignal.removeEventListener('abort', onAbort);
+        }
+        if (!page) {
+          void pendingPage.then(
+            latePage => latePage.close().catch(error => log(`Failed to close late page: ${errorMessage(error)}`, 'DEBUG', context)),
+            error => log(`Page creation failed after cancellation: ${errorMessage(error)}`, 'DEBUG', context)
+          );
+          return null;
+        }
+      } else {
+        page = await pendingPage;
+      }
+      if (abortSignal?.aborted) return null;
 
       // Debugging: Capture console and request events (filtered to reduce noise)
       if (context.forceDebug) {

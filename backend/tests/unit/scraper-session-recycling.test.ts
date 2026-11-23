@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
 import { CDP_PROBE_TIMEOUT_MS } from '../../../scraper/src/core/health';
-import { BrowserLaunchError } from '../../../scraper/src/core/engine';
+import { BrowserLaunchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
 import {
   closeSession,
   getBrowserSession,
@@ -135,6 +135,59 @@ beforeEach(() => {
 });
 
 describe('concurrent browser reservations', () => {
+  it('rejects a targeted session with a different engine without retiring it', async () => {
+    const target = await sessionWithProfile({ browserEngine: 'chromium' });
+    await expect(getBrowserSession({ sessionId: target.id, browserEngine: 'firefox' })).rejects.toBeInstanceOf(TargetSessionEngineMismatchError);
+    expect(target.tainted).toBe(false);
+    expect(target.activePages).toBe(0);
+    expect(sessions).toContain(target);
+    await closeSession(target);
+  });
+
+  it('does not reserve a request cancelled while waiting for selection', async () => {
+    let finishProbe!: (cookies: Awaited<ReturnType<PuppeteerBrowser['cookies']>>) => void;
+    const browser = fakeBrowser().browser;
+    vi.spyOn(browser, 'process').mockReturnValue(null);
+    vi.spyOn(browser, 'cookies').mockImplementationOnce(() => new Promise(resolve => { finishProbe = resolve; }));
+    const session = await sessionWithProfile({ browser, proxyUrl: null });
+    const first = getBrowserSession();
+    await vi.waitFor(() => expect(finishProbe).toBeDefined());
+    const abort = new AbortController();
+    const second = getBrowserSession({}, abort.signal);
+    abort.abort();
+    finishProbe([]);
+    expect(await first).toBe(session);
+    expect(await second).toBeNull();
+    expect(session.activePages).toBe(1);
+    await closeSession(session);
+  });
+
+  it('immediately releases a reservation cancelled during a shared launch', async () => {
+    let finish!: (browser: PuppeteerBrowser) => void;
+    const launch = new Promise<PuppeteerBrowser>(resolve => { finish = resolve; });
+    const session = await sessionWithProfile({ browser: null, launchPromise: launch, proxyUrl: null, totalScrapes: 0 });
+    const abort = new AbortController();
+    const request = getBrowserSession({}, abort.signal);
+    await vi.waitFor(() => expect(session.activePages).toBe(1));
+    abort.abort();
+    await expect(request).resolves.toBeNull();
+    expect(session.activePages).toBe(0);
+    expect(session.totalScrapes).toBe(0);
+    finish(fakeBrowser().browser);
+    await vi.waitFor(() => expect(session.idleTimer).not.toBeNull());
+    await closeSession(session);
+  });
+
+  it('does not recycle an idle session while its launch is still in flight', async () => {
+    let finish!: (browser: PuppeteerBrowser) => void;
+    const launch = new Promise<PuppeteerBrowser>(resolve => { finish = resolve; });
+    const launching = await sessionWithProfile({ browser: null, launchPromise: launch, proxyUrl: null });
+    for (let i = 1; i < MAX_BROWSERS; i++) await sessionWithProfile({ activePages: 1 });
+    await expect(getBrowserSession({ forceNewSession: true })).resolves.toBeNull();
+    expect(sessions).toContain(launching);
+    finish(fakeBrowser().browser);
+    for (const session of [...sessions]) await closeSession(session);
+  });
   it('shares in-flight launches, normalizes ignored Firefox UAs, and respects both limits', async () => {
     vi.stubEnv('FIREFOX_EXECUTABLE_PATH', process.execPath);
     let finish!: (browser: PuppeteerBrowser) => void;

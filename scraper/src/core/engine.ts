@@ -46,6 +46,13 @@ export class BrowserLaunchError extends Error {
   }
 }
 
+export class TargetSessionEngineMismatchError extends Error {
+  constructor() {
+    super('Target session uses a different browser engine');
+    this.name = 'TargetSessionEngineMismatchError';
+  }
+}
+
 /**
  * Whether Firefox should present the configured User-Agent.
  *
