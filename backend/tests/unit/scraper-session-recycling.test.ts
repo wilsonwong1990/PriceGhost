@@ -3,10 +3,16 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import puppeteer from 'puppeteer';
 import { CDP_PROBE_TIMEOUT_MS } from '../../../scraper/src/core/health';
+import { BrowserLaunchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
 import {
   closeSession,
+  getBrowserSession,
   markSessionTainted,
+  MAX_BROWSERS,
+  MAX_PAGES_PER_BROWSER,
+  MAX_SCRAPES_PER_BROWSER,
   sessions,
   sweepSessions,
   STUCK_SESSION_TIMEOUT_MS,
@@ -71,11 +77,12 @@ function fakeBrowser(options: FakeBrowserOptions = {}): { browser: PuppeteerBrow
   const proc = fakeProcess(options);
   const browser = {
     connected: options.connected ?? true,
-    version: () =>
+    cookies: () =>
       options.answersCdp === false
-        ? new Promise<string>(() => {})
-        : Promise.resolve('HeadlessChrome/154.0.0.0'),
+        ? new Promise<unknown>(() => {})
+        : Promise.resolve([]),
     process: () => proc,
+    on: () => browser,
     close: () => {
       if (mode === 'hangs') return new Promise<void>(() => {});
       if (mode === 'rejects') return Promise.reject(new Error("Network.enable timed out. Increase the 'protocolTimeout' setting"));
@@ -102,6 +109,7 @@ async function sessionWithProfile(over: Partial<BrowserSession> = {}): Promise<B
     idleTimer: null,
     proxyUrl: 'http://192.168.50.200:8888',
     userAgent: null,
+    browserEngine: 'chromium',
     lastActivity: Date.now(),
     userDataDir: dir,
     tainted: false,
@@ -126,9 +134,145 @@ beforeEach(() => {
   sessions.splice(0, sessions.length);
 });
 
+describe('concurrent browser reservations', () => {
+  it('rejects a targeted session with a different engine without retiring it', async () => {
+    const target = await sessionWithProfile({ browserEngine: 'chromium' });
+    await expect(getBrowserSession({ sessionId: target.id, browserEngine: 'firefox' })).rejects.toBeInstanceOf(TargetSessionEngineMismatchError);
+    expect(target.tainted).toBe(false);
+    expect(target.activePages).toBe(0);
+    expect(sessions).toContain(target);
+    await closeSession(target);
+  });
+
+  it('does not reserve a request cancelled while waiting for selection', async () => {
+    let finishProbe!: (cookies: Awaited<ReturnType<PuppeteerBrowser['cookies']>>) => void;
+    const browser = fakeBrowser().browser;
+    vi.spyOn(browser, 'process').mockReturnValue(null);
+    vi.spyOn(browser, 'cookies').mockImplementationOnce(() => new Promise(resolve => { finishProbe = resolve; }));
+    const session = await sessionWithProfile({ browser, proxyUrl: null });
+    const first = getBrowserSession();
+    await vi.waitFor(() => expect(finishProbe).toBeDefined());
+    const abort = new AbortController();
+    const second = getBrowserSession({}, abort.signal);
+    abort.abort();
+    finishProbe([]);
+    expect(await first).toBe(session);
+    expect(await second).toBeNull();
+    expect(session.activePages).toBe(1);
+    await closeSession(session);
+  });
+
+  it('immediately releases a reservation cancelled during a shared launch', async () => {
+    let finish!: (browser: PuppeteerBrowser) => void;
+    const launch = new Promise<PuppeteerBrowser>(resolve => { finish = resolve; });
+    const session = await sessionWithProfile({ browser: null, launchPromise: launch, proxyUrl: null, totalScrapes: 0 });
+    const abort = new AbortController();
+    const request = getBrowserSession({}, abort.signal);
+    await vi.waitFor(() => expect(session.activePages).toBe(1));
+    abort.abort();
+    await expect(request).resolves.toBeNull();
+    expect(session.activePages).toBe(0);
+    expect(session.totalScrapes).toBe(0);
+    finish(fakeBrowser().browser);
+    await vi.waitFor(() => expect(session.idleTimer).not.toBeNull());
+    await closeSession(session);
+  });
+
+  it('does not recycle an idle session while its launch is still in flight', async () => {
+    let finish!: (browser: PuppeteerBrowser) => void;
+    const launch = new Promise<PuppeteerBrowser>(resolve => { finish = resolve; });
+    const launching = await sessionWithProfile({ browser: null, launchPromise: launch, proxyUrl: null });
+    for (let i = 1; i < MAX_BROWSERS; i++) await sessionWithProfile({ activePages: 1 });
+    await expect(getBrowserSession({ forceNewSession: true })).resolves.toBeNull();
+    expect(sessions).toContain(launching);
+    finish(fakeBrowser().browser);
+    for (const session of [...sessions]) await closeSession(session);
+  });
+  it('shares in-flight launches, normalizes ignored Firefox UAs, and respects both limits', async () => {
+    vi.stubEnv('FIREFOX_EXECUTABLE_PATH', process.execPath);
+    let finish!: (browser: PuppeteerBrowser) => void;
+    const launch = new Promise<PuppeteerBrowser>(resolve => { finish = resolve; });
+    const launchSpy = vi.spyOn(puppeteer, 'launch').mockImplementation(() => launch);
+    const count = MAX_BROWSERS * MAX_PAGES_PER_BROWSER;
+    const requests = Array.from({ length: count + 1 }, (_, index) =>
+      getBrowserSession({ browserEngine: 'firefox', userAgent: `Chrome/${index}.0` }),
+    );
+
+    await vi.waitFor(() => expect(sessions.reduce((sum, session) => sum + session.activePages, 0)).toBe(count));
+    expect(sessions).toHaveLength(MAX_BROWSERS);
+    expect(sessions.every(session => session.activePages <= MAX_PAGES_PER_BROWSER && session.userAgent === null)).toBe(true);
+    await vi.waitFor(() => expect(launchSpy).toHaveBeenCalledTimes(MAX_BROWSERS));
+    finish(fakeBrowser().browser);
+    const results = await Promise.all(requests);
+    expect(results.filter(Boolean)).toHaveLength(count);
+    expect(results.filter(result => result === null)).toHaveLength(1);
+    for (const session of [...sessions]) await closeSession(session);
+  });
+
+  it('rolls back all reservations after a shared Firefox launch fails', async () => {
+    vi.stubEnv('FIREFOX_EXECUTABLE_PATH', process.execPath);
+    let fail!: (error: Error) => void;
+    const launch = new Promise<PuppeteerBrowser>((_resolve, reject) => { fail = reject; });
+    vi.spyOn(puppeteer, 'launch').mockImplementation(() => launch);
+    const requests = Array.from({ length: MAX_PAGES_PER_BROWSER }, () =>
+      getBrowserSession({ browserEngine: 'firefox' }),
+    );
+    const settled = Promise.allSettled(requests);
+    await vi.waitFor(() => expect(sessions[0]?.activePages).toBe(MAX_PAGES_PER_BROWSER));
+    const session = sessions[0];
+    fail(new Error('launch failed for socks5://user:secret@proxy.example:1080'));
+    const results = await settled;
+    expect(results.every(result => result.status === 'rejected' && result.reason instanceof BrowserLaunchError)).toBe(true);
+    expect(results.every(result => result.status === 'rejected' && !result.reason.message.includes('secret'))).toBe(true);
+    expect(session.activePages).toBe(0);
+    expect(session.totalScrapes).toBe(0);
+    expect(sessions).not.toContain(session);
+  });
+
+  it('reserves the remaining scrape allowance while a launch is pending', async () => {
+    let finish!: (browser: PuppeteerBrowser) => void;
+    const launch = new Promise<PuppeteerBrowser>(resolve => { finish = resolve; });
+    const session = await sessionWithProfile({
+      browser: null,
+      launchPromise: launch,
+      proxyUrl: null,
+      totalScrapes: MAX_SCRAPES_PER_BROWSER - 1,
+    });
+    for (let i = 1; i < MAX_BROWSERS; i++) {
+      await sessionWithProfile({ activePages: 1 });
+    }
+
+    const first = getBrowserSession();
+    await vi.waitFor(() => expect(session.totalScrapes).toBe(MAX_SCRAPES_PER_BROWSER));
+    await expect(getBrowserSession()).resolves.toBeNull();
+    expect(session.activePages).toBe(1);
+    finish(fakeBrowser().browser);
+    expect(await first).toBe(session);
+    for (const pooled of [...sessions]) await closeSession(pooled);
+  });
+
+  it('does not retire a session reserved while the watchdog probe is pending', async () => {
+    const browser = fakeBrowser().browser;
+    vi.spyOn(browser, 'process').mockReturnValue(null);
+    let failProbe!: (error: Error) => void;
+    const firstProbe: ReturnType<typeof browser.cookies> = new Promise((_resolve, reject) => { failProbe = reject; });
+    vi.spyOn(browser, 'cookies').mockImplementationOnce(() => firstProbe).mockResolvedValue([]);
+    const session = await sessionWithProfile({ browser, proxyUrl: null });
+    const sweep = sweepSessions();
+    const acquired = await getBrowserSession();
+    failProbe(new Error('probe failed'));
+    await sweep;
+    expect(acquired).toBe(session);
+    expect(session.tainted).toBe(false);
+    expect(sessions).toContain(session);
+    await closeSession(session);
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   sessions.splice(0, sessions.length);
 });
 
@@ -246,5 +390,44 @@ describe('sweepSessions (issue #254)', () => {
     expect(sessions).toContain(busy);
     expect(sessions).not.toContain(stuck);
     await closeSession(busy);
+  });
+});
+
+describe('a Firefox request that cannot launch does not evict a pooled session', () => {
+  it.each([
+    ['an https:// proxy', { proxyUrl: 'https://proxy.example.com:8443' }, undefined],
+    ['a missing Firefox binary', {}, path.join(os.tmpdir(), 'pricestalker-no-such-firefox')],
+  ])('rejects %s before recycling an idle session', async (_case, options, executablePath) => {
+    vi.stubEnv('FIREFOX_EXECUTABLE_PATH', executablePath ?? process.execPath);
+    const pooled: BrowserSession[] = [];
+    for (let i = 0; i < MAX_BROWSERS; i++) {
+      pooled.push(await sessionWithProfile());
+    }
+
+    await expect(getBrowserSession({ browserEngine: 'firefox', ...options })).rejects.toBeInstanceOf(
+      BrowserLaunchError,
+    );
+
+    expect(sessions).toHaveLength(MAX_BROWSERS);
+    for (const session of pooled) {
+      expect(sessions).toContain(session);
+      await closeSession(session);
+    }
+  });
+
+  it('raises the launch error, not a retryable null, to a request that joined a failing launch', async () => {
+    const launch = Promise.reject(new Error('Failed to launch the browser process'));
+    launch.catch(() => {});
+    const launching = await sessionWithProfile({
+      browser: null,
+      launchPromise: launch,
+      browserEngine: 'firefox',
+      proxyUrl: null,
+    });
+
+    await expect(getBrowserSession({ browserEngine: 'firefox' })).rejects.toBeInstanceOf(BrowserLaunchError);
+
+    expect(launching.activePages).toBe(0);
+    await closeSession(launching);
   });
 });

@@ -5,7 +5,7 @@ import {
   PageNotAvailableError,
   resolveUserAgent
 } from '../transport';
-import { RetailerConfig } from '../../../models';
+import { RetailerConfig, RetailerBrowserEngine } from '../../../models';
 
 /**
  * What the browser-scraper service is asked for.
@@ -35,6 +35,12 @@ export interface RemoteScraperOptions {
   interstitialWaitMs?: number;
   /** How many auto-resolve attempts to make before returning the wall (issue #235). */
   interstitialRetries?: number;
+  /**
+   * Sent only for a non-default engine, so a Chromium retailer's request is
+   * byte-for-byte what it was before engines existed and still works against
+   * an older scraper image.
+   */
+  browserEngine?: RetailerBrowserEngine;
 }
 
 export interface RemoteAcquisitionOptions {
@@ -44,6 +50,7 @@ export interface RemoteAcquisitionOptions {
   productId?: number;
   extractionSteps: string[];
   requestId?: string;
+  onEngine?: (engine: RetailerBrowserEngine | undefined) => void;
 }
 
 /**
@@ -59,7 +66,7 @@ export interface RemoteAcquisitionOptions {
  * browser is how a BLOCKED page gets mistaken for a product page.
  */
 export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Promise<string | null> {
-  const { url, domain, domainConfig, productId, extractionSteps, requestId } = options;
+  const { url, domain, domainConfig, productId, extractionSteps, requestId, onEngine } = options;
   
   const rsUrl = await settingsCache.getRemoteScraperUrl();
   if (!rsUrl) {
@@ -108,6 +115,10 @@ export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Prom
       remoteOptions.proxyUrl = currentProxy;
     }
 
+    if (domainConfig?.browser_engine === 'firefox') {
+      remoteOptions.browserEngine = 'firefox';
+    }
+
     // Referrer policy: retailer config, then the system default, then none —
     // never a fabricated random one (issue #44).
     if (domainConfig?.referrer) {
@@ -120,9 +131,9 @@ export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Prom
     // "Custom" now means the retailer's own override; the resolved system
     // default is no longer indistinguishable from sending nothing at all.
     logger.debug(`Scraper | Remote | Details | UA: ${remoteOptions.userAgent}, Proxy: ${remoteOptions.proxyUrl || 'None'}, Ref: ${remoteOptions.referrer || 'None'}`, 'Scraper');
-    extractionSteps.push(`Scraper | Remote | UA: ${domainConfig?.user_agent ? 'Custom' : 'Default'} | Proxy: ${remoteOptions.proxyUrl ? 'Yes' : 'No'}`);
+    extractionSteps.push(`Scraper | Remote | UA: ${domainConfig?.user_agent ? 'Custom' : 'Default'} | Proxy: ${remoteOptions.proxyUrl ? 'Yes' : 'No'} | Engine: ${remoteOptions.browserEngine === 'firefox' ? 'Firefox' : 'Chromium'}`);
     
-    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions);
+    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions, onEngine);
     extractionSteps.push(`Scraper | Remote | Success`);
     return html;
   } catch (e) {

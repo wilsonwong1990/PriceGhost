@@ -47,7 +47,7 @@ router.post('/extract', asyncHandler(async (req: AuthRequest, res: Response) => 
         headers: { 'User-Agent': config?.user_agent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' },
         timeout: 15000
       });
-      result = { html: response.data, name: null, price: null, imageUrl: null, url, stockStatus: 'unknown', aiStatus: null, priceCandidates: [], needsReview: false };
+      result = { html: response.data, name: null, price: null, imageUrl: null, url, stockStatus: 'unknown', aiStatus: null, priceCandidates: [], needsReview: false, acquisition: { mode: 'bypass' } };
     } catch (e: any) {
       res.status(500).json({ error: `Bypass fetch failed: ${e.message}` });
       return;

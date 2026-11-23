@@ -1,7 +1,9 @@
 import puppeteerExtra from 'puppeteer-extra';
+import puppeteerVanilla from 'puppeteer';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import AdblockerPlugin from 'puppeteer-extra-plugin-adblocker';
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '../utils/logger.js';
@@ -10,6 +12,8 @@ import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { isProcessGone, isSessionResponsive, type ProbeProcess } from './health.js';
 import { findReusableSession } from './pool.js';
+import { BrowserLaunchError, TargetSessionEngineMismatchError, buildFirefoxPrefs, DEFAULT_BROWSER_ENGINE, shouldApplyUserAgentToFirefox, type BrowserEngine } from './engine.js';
+import { scrubUrlCredentials } from '../utils/scrub.js';
 
 interface PuppeteerExtra {
   use(plugin: unknown): void;
@@ -345,7 +349,7 @@ export async function sweepSessions(now: number = Date.now()): Promise<void> {
       continue;
     }
 
-    if (session.browser && !(await isSessionResponsive(session))) {
+    if (session.browser && !(await isSessionResponsive(session)) && session.activePages === 0 && sessions.includes(session)) {
       markSessionTainted(session, 'CDP liveness probe failed');
       await closeSession(session);
     }
@@ -366,28 +370,10 @@ export function startWatchdog() {
 }
 
 /**
- * Launches a new browser instance and initializes the session
+ * Launches Chromium through puppeteer-extra, with the stealth and ad-blocker
+ * plugins registered above.
  */
-export async function createNewSession(proxyUrl: string | null = null, userAgent: string | null = null): Promise<BrowserSession> {
-  const id = `session_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  
-  const userDataDir = path.join(PROFILE_BASE, id);
-
-  const session: BrowserSession = {
-    id,
-    browser: null,
-    launchPromise: null,
-    activePages: 0,
-    totalScrapes: 0,
-    idleTimer: null,
-    proxyUrl,
-    userAgent,
-    lastActivity: Date.now(),
-    userDataDir,
-    tainted: false,
-    taintReason: null
-  };
-
+function launchChromium(userDataDir: string, proxyUrl: string | null, userAgent: string | null): Promise<Browser> {
   const args = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -404,14 +390,77 @@ export async function createNewSession(proxyUrl: string | null = null, userAgent
   const effectiveUa = userAgent || DEFAULT_SCRAPER_USER_AGENT;
   args.push(`--user-agent=${effectiveUa}`);
 
-  log(`Launching new browser instance for ${id} (Proxy: ${proxyUrl || 'None'}, UA: ${userAgent ? 'Custom' : 'Default'})`, 'INFO');
-  
-  session.launchPromise = fs.mkdir(userDataDir, { recursive: true }).then(() => puppeteer.launch({
+  return puppeteer.launch({
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     headless: true,
     userDataDir,
     args
-  })).then((browser: Browser) => {
+  });
+}
+
+/**
+ * Launches Firefox over WebDriver BiDi through plain Puppeteer.
+ *
+ * puppeteer-extra is bypassed on purpose: its stealth evasions and the
+ * ad-blocker drive Chromium through CDP and do not apply to Firefox. Identity
+ * (proxy, User-Agent) is set with preferences, because BiDi has no per-page
+ * equivalent of the CDP overrides the Chromium path uses.
+ */
+function launchFirefox(userDataDir: string, proxyUrl: string | null, userAgent: string | null): Promise<Browser> {
+  return puppeteerVanilla.launch({
+    browser: 'firefox',
+    executablePath: firefoxExecutablePath(),
+    headless: true,
+    userDataDir,
+    extraPrefsFirefox: buildFirefoxPrefs(proxyUrl, userAgent),
+    // Puppeteer points Firefox's remote settings at a dummy server, but ESR and
+    // release builds ignore that override unless this is set, and would
+    // otherwise contact Mozilla's settings servers (through the proxy, if one
+    // is configured) on every launch.
+    env: { ...process.env, MOZ_REMOTE_SETTINGS_DEVTOOLS: '1' }
+  });
+}
+
+function firefoxExecutablePath(): string {
+  return process.env.FIREFOX_EXECUTABLE_PATH || '/usr/bin/firefox-esr';
+}
+
+/**
+ * Launches a new browser instance and initializes the session
+ */
+export function createNewSession(
+  proxyUrl: string | null = null,
+  userAgent: string | null = null,
+  browserEngine: BrowserEngine = DEFAULT_BROWSER_ENGINE
+): BrowserSession {
+  if (browserEngine === 'firefox' && !shouldApplyUserAgentToFirefox(userAgent)) userAgent = null;
+  const id = `session_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  
+  const userDataDir = path.join(PROFILE_BASE, id);
+
+  const session: BrowserSession = {
+    id,
+    browser: null,
+    launchPromise: null,
+    activePages: 0,
+    totalScrapes: 0,
+    idleTimer: null,
+    proxyUrl,
+    userAgent,
+    browserEngine,
+    lastActivity: Date.now(),
+    userDataDir,
+    tainted: false,
+    taintReason: null
+  };
+
+  const proxyForLog = proxyUrl ? scrubUrlCredentials(proxyUrl) : 'None';
+  log(`Launching new ${browserEngine} instance for ${id} (Proxy: ${proxyForLog}, UA: ${userAgent ? 'Custom' : 'Default'})`, 'INFO');
+  session.launchPromise = fs.mkdir(userDataDir, { recursive: true }).then(() =>
+    browserEngine === 'firefox'
+      ? launchFirefox(userDataDir, proxyUrl, userAgent)
+      : launchChromium(userDataDir, proxyUrl, userAgent)
+  ).then((browser: Browser) => {
     session.browser = browser;
     session.launchPromise = null;
 
@@ -425,7 +474,7 @@ export async function createNewSession(proxyUrl: string | null = null, userAgent
 
     return browser;
   }).catch((error: unknown) => {
-    log(`Failed to launch browser for ${id}: ${errorMessage(error)}`, 'ERROR');
+    log(`Failed to launch ${browserEngine} for ${id}: ${scrubUrlCredentials(errorMessage(error))}`, 'ERROR');
     const idx = sessions.indexOf(session);
     if (idx > -1) sessions.splice(idx, 1);
     void removeProfileDir(session);
@@ -437,53 +486,107 @@ export async function createNewSession(proxyUrl: string | null = null, userAgent
 }
 
 /**
- * Hands a pooled session to a request: cancels its idle timer, counts the page
- * and waits for a launch that is still in flight. Returns null when that
- * launch failed, exactly as the inline version it replaced did.
+ * Reserves a page while pool selection is locked.
  */
-async function claimSession(session: BrowserSession): Promise<BrowserSession | null> {
+function reserveSession(session: BrowserSession): BrowserSession {
   if (session.idleTimer) {
     clearTimeout(session.idleTimer);
     session.idleTimer = null;
   }
   session.activePages++;
+  session.totalScrapes++;
+  return session;
+}
 
-  if (session.launchPromise) {
+async function awaitSessionLaunch(session: BrowserSession, signal?: AbortSignal): Promise<BrowserSession | null> {
+  const launch = session.launchPromise;
+  if (launch) {
+    let onAbort: (() => void) | undefined;
     try {
-      await session.launchPromise;
-    } catch {
+      const aborted = new Promise<'aborted'>(resolve => {
+        onAbort = () => resolve('aborted');
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      const outcome = await Promise.race([launch.then(() => 'launched' as const), aborted]);
+      if (outcome === 'aborted') {
+        session.activePages--;
+        session.totalScrapes--;
+        void launch.then(() => {
+          if (session.activePages === 0 && sessions.includes(session) && !session.idleTimer) {
+            session.idleTimer = setTimeout(() => {
+              if (session.activePages === 0) void closeSession(session);
+            }, IDLE_TIMEOUT);
+          }
+        }, () => {});
+        return null;
+      }
+    } catch (e) {
       session.activePages--;
+      session.totalScrapes--;
+      if (session.browserEngine === 'firefox') throw new BrowserLaunchError(session.browserEngine, e);
       return null;
+    } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort);
     }
   }
   return session;
 }
 
+// Serialize selection, liveness checks, recycling and page reservations.
+// Launch completion is awaited outside the lock so other requests can join it.
+let poolSelection: Promise<void> = Promise.resolve();
+
 /**
  * Finds or creates an available browser session.
  */
-export async function getBrowserSession(options: ScrapeOptions = {}): Promise<BrowserSession | null> {
+export async function getBrowserSession(options: ScrapeOptions = {}, signal?: AbortSignal): Promise<BrowserSession | null> {
   const reqProxy = options.proxyUrl || null;
-  const reqUA = options.userAgent || null;
+  const reqEngine = options.browserEngine || DEFAULT_BROWSER_ENGINE;
+  const requestedUA = options.userAgent || null;
+  const reqUA = reqEngine === 'firefox' && !shouldApplyUserAgentToFirefox(requestedUA) ? null : requestedUA;
   const forceNew = options.forceNewSession === true;
   const targetId = options.sessionId || null;
 
-  log(`Session Acquisition | Proxy: ${reqProxy || 'None'}, UA: ${reqUA ? 'Custom' : 'Default'}, ForceNew: ${forceNew}`, 'DEBUG');
+  log(`Session Acquisition | Engine: ${reqEngine}, Proxy: ${reqProxy ? scrubUrlCredentials(reqProxy) : 'None'}, UA: ${reqUA ? 'Custom' : 'Default'}, ForceNew: ${forceNew}`, 'DEBUG');
 
+  let unlock!: () => void;
+  const previous = poolSelection;
+  poolSelection = new Promise<void>(resolve => { unlock = resolve; });
+  await previous;
+  let selected: BrowserSession | null;
+  try {
+    selected = signal?.aborted ? null : await selectSession(reqProxy, reqUA, reqEngine, forceNew, targetId, signal);
+  } finally {
+    unlock();
+  }
+  return selected ? awaitSessionLaunch(selected, signal) : null;
+}
+
+async function selectSession(
+  reqProxy: string | null,
+  reqUA: string | null,
+  reqEngine: BrowserEngine,
+  forceNew: boolean,
+  targetId: string | null,
+  signal?: AbortSignal
+): Promise<BrowserSession | null> {
   // 1. Direct Targeting by Session ID (Debug/Control)
   if (targetId) {
-    const target = sessions.find(s => s.id === targetId && !s.tainted && (!s.browser || s.browser.connected));
-    if (target && (!target.browser || (await isSessionResponsive(target)))) {
-      return claimSession(target);
+    const namedSession = sessions.find(s => s.id === targetId);
+    if (namedSession && namedSession.browserEngine !== reqEngine) throw new TargetSessionEngineMismatchError();
+    const target = sessions.find(s => s.id === targetId && s.browserEngine === reqEngine && !s.tainted && s.activePages < MAX_PAGES_PER_BROWSER && s.totalScrapes < MAX_SCRAPES_PER_BROWSER && (!s.browser || s.browser.connected));
+    if (target && (!target.browser || (await isSessionResponsive(target))) && sessions.includes(target) && !target.tainted && !signal?.aborted) {
+      return reserveSession(target);
     }
-    if (target) {
+    if (target && !signal?.aborted && target.activePages === 0 && sessions.includes(target)) {
       markSessionTainted(target, 'CDP liveness probe failed');
       if (target.activePages === 0) await closeSession(target);
     }
     log(`Targeted session ${targetId} not found, disconnected or unresponsive`, 'WARN');
   }
 
-  // 2. Find existing matching session (Group by Proxy + UA)
+  // 2. Find existing matching session (Group by Proxy + UA + Engine)
   //
   // Every candidate answers a CDP round trip before it is handed over: a
   // browser wedged by an aborted scrape keeps `connected === true` and used to
@@ -492,7 +595,7 @@ export async function getBrowserSession(options: ScrapeOptions = {}): Promise<Br
   if (!forceNew) {
     const session = await findReusableSession({
       pool: sessions,
-      match: { proxyUrl: reqProxy, userAgent: reqUA },
+      match: { proxyUrl: reqProxy, userAgent: reqUA, browserEngine: reqEngine },
       limits: { maxPagesPerBrowser: MAX_PAGES_PER_BROWSER, maxScrapesPerBrowser: MAX_SCRAPES_PER_BROWSER },
       probe: candidate => isSessionResponsive(candidate),
       discard: async candidate => {
@@ -501,7 +604,20 @@ export async function getBrowserSession(options: ScrapeOptions = {}): Promise<Br
       },
     });
 
-    if (session) return claimSession(session);
+    if (signal?.aborted) return null;
+    if (session && sessions.includes(session) && !session.tainted) return reserveSession(session);
+  }
+
+  // Reject an unsupported Firefox proxy or a missing Firefox binary before
+  // recycling a healthy session for a launch that cannot succeed.
+  if (reqEngine === 'firefox') {
+    try {
+      buildFirefoxPrefs(reqProxy, reqUA);
+      await fs.access(firefoxExecutablePath(), fsConstants.X_OK);
+    } catch (e) {
+      throw new BrowserLaunchError(reqEngine, e);
+    }
+    if (signal?.aborted) return null;
   }
 
   // 3. Handle Pool Capacity & Recycling
@@ -509,7 +625,8 @@ export async function getBrowserSession(options: ScrapeOptions = {}): Promise<Br
     // Look for an idle session to recycle, preferring one already marked
     // unusable over a healthy one (issue #254).
     const idleSession =
-      sessions.find(s => s.activePages === 0 && s.tainted) ?? sessions.find(s => s.activePages === 0);
+      sessions.find(s => s.activePages === 0 && !s.launchPromise && s.tainted) ??
+      sessions.find(s => s.activePages === 0 && !s.launchPromise);
     if (idleSession) {
       log(`Recycling idle session ${idleSession.id} to accommodate new request (ForceNew: ${forceNew})`, 'INFO');
       await closeSession(idleSession);
@@ -521,12 +638,6 @@ export async function getBrowserSession(options: ScrapeOptions = {}): Promise<Br
   }
 
   // 4. Create New Session
-  const newSession = await createNewSession(reqProxy, reqUA);
-  newSession.activePages++;
-  try {
-    await newSession.launchPromise;
-    return newSession;
-  } catch (e) {
-    return null;
-  }
+  if (signal?.aborted) return null;
+  return reserveSession(createNewSession(reqProxy, reqUA, reqEngine));
 }

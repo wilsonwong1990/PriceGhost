@@ -11,4 +11,5 @@
  * URL, and `http://user:pass@host:port` is the normal shape of it.
  */
 export const scrubUrlCredentials = (value: string): string =>
-  value.replace(/(https?:\/\/)([^:]+):([^@]+)(@[^\s/?#]+)/gi, '$1[REDACTED]:[REDACTED]$4');
+  value.replace(/(\b(?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p[\t\r\n]*s?[\t\r\n]*:[/\\\t\r\n]*|[a-z][a-z0-9+.\-\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/))([^/?#]+)@/gi,
+    (_match, scheme: string, userinfo: string) => `${scheme}${userinfo.includes(':') ? '[REDACTED]:[REDACTED]' : '[REDACTED]'}@`);

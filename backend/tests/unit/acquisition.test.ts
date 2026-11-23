@@ -4,6 +4,7 @@ import { acquireStandardHtml, BotChallengeError } from '../../src/services/scrap
 import { acquireHtml } from '../../src/services/scraper/acquisition/index';
 import { PageNotAvailableError } from '../../src/services/scraper/transport/errors';
 import type { RetailerConfig } from '../../src/models';
+import { settingsCache } from '../../src/utils/cache';
 
 // Keep real AxiosError / AxiosHeaders while mocking network methods
 vi.mock('axios', async (importOriginal) => {
@@ -141,6 +142,33 @@ describe('acquireHtml Soft-404 Heuristics Unit Tests', () => {
 
     expect(result.html).toContain('My Product');
     expect(result.challengeReason).toBeNull();
+    expect(result.acquisition).toEqual({ mode: 'http' });
+  });
+
+  it.each(['firefox', undefined] as const)('reports only the engine returned by the browser (%s)', async browserEngine => {
+    vi.mocked(axios.post).mockResolvedValueOnce({ data: { html: '<html>product</html>', browserEngine }, status: 200 });
+    const result = await acquireHtml({
+      url: 'http://example.com/product',
+      domain: 'example.com',
+      domainConfig: { use_browser_scraper: true } as RetailerConfig,
+      extractionSteps: [],
+    });
+    expect(result.acquisition).toEqual({ mode: 'browser', browserEngine });
+  });
+
+  it('reports HTTP when a configured browser scraper is unavailable', async () => {
+    vi.mocked(settingsCache.getRemoteScraperUrl).mockResolvedValueOnce(null);
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      status: 200, data: '<html>product</html>',
+      request: { res: { responseUrl: 'http://example.com/product' } },
+    });
+    const result = await acquireHtml({
+      url: 'http://example.com/product',
+      domain: 'example.com',
+      domainConfig: { use_browser_scraper: true, browser_engine: 'firefox' } as RetailerConfig,
+      extractionSteps: [],
+    });
+    expect(result.acquisition).toEqual({ mode: 'http' });
   });
 
   it('should throw PageNotAvailableError when page title contains "product not found"', async () => {

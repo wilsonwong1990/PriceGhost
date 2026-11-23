@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import axios from 'axios';
 import { logger } from '../../../utils/system/logger';
 import { PageNotAvailableError } from './errors';
+import type { RetailerBrowserEngine } from '../../../models/types/retailer';
 
 /**
  * Budget assumed when a caller sends no `timeout`.
@@ -39,9 +40,25 @@ export const MIN_REQUEST_TIMEOUT_MS = 70000;
 export const REMOTE_RESPONSE_OVERHEAD_MS = 15000;
 
 /**
+ * The Browser Scraper answered with a different engine than was asked for.
+ *
+ * A scraper image older than the per-retailer engine ignores `browserEngine`
+ * and serves Chromium, which is exactly the browser a Firefox retailer was moved
+ * off. Failing loudly says "update the scraper" instead of returning the wall
+ * page Chromium was given.
+ */
+export class BrowserEngineMismatchError extends Error {
+  constructor(requested: string, served: unknown) {
+    const reported = typeof served === 'string' ? served : 'no engine';
+    super(`Browser Scraper served ${reported} instead of the requested ${requested}; update the Browser Scraper to a version that supports ${requested}`);
+    this.name = 'BrowserEngineMismatchError';
+  }
+}
+
+/**
  * Fetches HTML via the remote scraper instance (ruski).
  */
-export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, options: any = {}): Promise<string> {
+export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, options: any = {}, onEngine?: (engine: RetailerBrowserEngine | undefined) => void): Promise<string> {
   const maxRetries = 3;
   let retryCount = 0;
 
@@ -89,17 +106,25 @@ export async function fetchRemoteHtml(url: string, remoteScraperUrl: string, opt
         signal: controller.signal
       });
 
+      const servedEngine = response.data?.browserEngine;
+      if (options.browserEngine && servedEngine !== options.browserEngine) {
+        throw new BrowserEngineMismatchError(options.browserEngine, servedEngine);
+      }
+
       const latency = Date.now() - start;
-      logger.info(`${logPrefix} | Success | Url: ${url} | Latency: ${latency}ms`, 'Scraper', {
+      const engineNote = typeof servedEngine === 'string' ? ` | Engine: ${servedEngine}` : '';
+      logger.info(`${logPrefix} | Success | Url: ${url}${engineNote} | Latency: ${latency}ms`, 'Scraper', {
         requestId,
         productId,
         url,
         latency
       });
 
+      onEngine?.(servedEngine === 'chromium' || servedEngine === 'firefox' ? servedEngine : undefined);
       return response.data.html || '';
 
     } catch (error: any) {
+      if (error instanceof BrowserEngineMismatchError) throw error;
       if (axios.isCancel(error) || error.name === 'AbortError') {
         logger.warn(`Browser Scraper | [${requestId}] | Aborted | Request for ${url} was canceled by backend`, 'Scraper');
         throw new Error('Browser Scraper request aborted');

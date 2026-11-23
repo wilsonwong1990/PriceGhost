@@ -1,4 +1,5 @@
 import type { Browser, Page } from 'puppeteer';
+import type { BrowserEngine } from './core/engine.js';
 
 export interface ScrapeOptions {
   proxyUrl?: string;
@@ -30,6 +31,8 @@ export interface ScrapeOptions {
   /** Challenge auto-resolve attempts. Default 2, 0 disables the loop (issue #235). */
   interstitialRetries?: number;
   acceptLanguage?: string;
+  /** Engine to launch for this request. Omitted means Chromium. */
+  browserEngine?: BrowserEngine;
 }
 
 export interface LogContext {
@@ -48,6 +51,8 @@ export interface BrowserSession {
   idleTimer: NodeJS.Timeout | null;
   proxyUrl: string | null;
   userAgent: string | null;
+  /** Fixed at launch, like the proxy and User-Agent, so it is part of the pool key. */
+  browserEngine: BrowserEngine;
   lastActivity: number;
   userDataDir: string | null;
   /**
@@ -83,6 +88,11 @@ export interface ScrapeResult {
    * `challengeDetected`.
    */
   challengeUnresolved: boolean;
+  /**
+   * The engine that actually served the page. A targeted debug session keeps
+   * the engine it was launched with, so this can differ from the request.
+   */
+  browserEngine: BrowserEngine;
 }
 
 export type ScraperPage = Page;

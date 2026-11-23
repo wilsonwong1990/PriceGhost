@@ -5,9 +5,10 @@ import { SessionService } from '../services/SessionService.js';
 import { IDLE_TIMEOUT, MAX_SCRAPES_PER_BROWSER, markSessionTainted } from '../core/SessionManager.js';
 import { isProtocolError } from '../core/health.js';
 import { scrapeOutcomeLog } from '../utils/outcome.js';
-import type { ScrapeOptions } from '../types.js';
+import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { scrubUrlCredentials } from '../utils/scrub.js';
+import { BrowserLaunchError, TargetSessionEngineMismatchError, resolveBrowserEngine } from '../core/engine.js';
 
 const router = express.Router();
 
@@ -30,9 +31,38 @@ router.post('/scrape', async (req, res) => {
     return res.status(400).json({ error: 'URL is required' });
   }
 
-  const session = await SessionService.acquireSession(options);
+  const browserEngine = resolveBrowserEngine(options.browserEngine);
+  if (!browserEngine) {
+    const value = typeof options.browserEngine === 'string'
+      ? options.browserEngine
+      : JSON.stringify(options.browserEngine);
+    return res.status(400).json({ error: `Unknown browserEngine: ${value}` });
+  }
+
+  const abortController = new AbortController();
+  let session: BrowserSession | null = null;
+  let scrapeStarted = false;
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      log(`Client disconnected: ${url}. Aborting request.`, 'WARN', context);
+      abortController.abort();
+      if (session && scrapeStarted) markSessionTainted(session, 'scrape aborted by client disconnect');
+    }
+  });
+  if (res.destroyed) abortController.abort();
+
+  try {
+    session = await SessionService.acquireSession({ ...options, browserEngine }, abortController.signal);
+  } catch (error) {
+    if (abortController.signal.aborted) return;
+    if (error instanceof TargetSessionEngineMismatchError) return res.status(409).json({ error: error.message });
+    if (!(error instanceof BrowserLaunchError)) throw error;
+    log(`${error.message} for ${url}`, 'ERROR', context);
+    return res.status(500).json({ error: error.message });
+  }
   
   if (!session) {
+    if (abortController.signal.aborted) return;
     const status = SessionService.getPoolStatus();
     log(`Rate limiting request: ${url} (All ${status.activeSessions} browsers busy)`, 'WARN', context);
     return res.status(503).json({ 
@@ -40,29 +70,13 @@ router.post('/scrape', async (req, res) => {
     });
   }
 
-  session.totalScrapes++;
   session.lastActivity = Date.now();
   
-  log(`Scraping: ${url} (Session: ${session.id}, Active: ${session.activePages}, Total: ${session.totalScrapes}) [Proxy: ${proxyForLog}, UA: ${options.userAgent || 'None'}, Ref: ${options.referrer || 'None'}]`, 'INFO', context);
-
-  const abortController = new AbortController();
-
-  res.on('close', () => {
-    if (!res.writableEnded) {
-      log(`Client disconnected: ${url}. Aborting request.`, 'WARN', context);
-      abortController.abort();
-      // The abort closes the page out from under whatever CDP command was in
-      // flight, which is what leaves the browser wedged with
-      // `browser.connected` still true (issue #254). The session is retired
-      // rather than returned to the warm pool, where the next request for the
-      // same proxy and User-Agent would inherit it and fail every
-      // `browser.newPage()` with `Network.enable timed out` until the idle
-      // timer expired. A browser relaunch is cheap next to that.
-      markSessionTainted(session, 'scrape aborted by client disconnect');
-    }
-  });
+  log(`Scraping: ${url} (Session: ${session.id}, Active: ${session.activePages}, Total: ${session.totalScrapes}) [Engine: ${session.browserEngine}, Proxy: ${proxyForLog}, UA: ${options.userAgent || 'None'}, Ref: ${options.referrer || 'None'}]`, 'INFO', context);
 
   try {
+    if (abortController.signal.aborted) return;
+    scrapeStarted = true;
     const result = await ScraperService.scrape(url, session, options, abortController.signal);
     
     if (abortController.signal.aborted) {
@@ -96,6 +110,7 @@ router.post('/scrape', async (req, res) => {
     }
   } finally {
     session.activePages--;
+    if (!scrapeStarted) session.totalScrapes--;
     session.lastActivity = Date.now();
 
     if (session.activePages === 0) {
