@@ -30,22 +30,27 @@ test('saves the selected browser override and omits it when overrides are disabl
   await page.getByRole('button', { name: 'SAVE', exact: true }).click();
   await expect.poll(() => saves[0]?.browser_engine).toBe('chromium');
 
+  // Changing the engine without rerunning must not relabel the Chromium result.
   await page.locator('#debug-browser-engine').selectOption('firefox');
+  await page.getByRole('button', { name: 'SAVE', exact: true }).click();
+  await expect.poll(() => saves.length).toBe(2);
+  expect(saves[1]?.browser_engine).toBe('chromium');
+
   await page.getByRole('button', { name: 'RUN EXTRACTION' }).click();
   await page.getByRole('button', { name: 'SAVE', exact: true }).click();
-  await expect.poll(() => saves[1]?.browser_engine).toBe('firefox');
+  await expect.poll(() => saves[2]?.browser_engine).toBe('firefox');
 
   await page.getByText('Browser Scraper', { exact: true }).click();
   await page.getByRole('button', { name: 'RUN EXTRACTION' }).click();
   await page.getByRole('button', { name: 'SAVE', exact: true }).click();
-  await expect.poll(() => saves.length).toBe(3);
-  expect(saves[2]).not.toHaveProperty('browser_engine');
+  await expect.poll(() => saves.length).toBe(4);
+  expect(saves[3]).not.toHaveProperty('browser_engine');
 
   await page.getByText('Browser Scraper', { exact: true }).click();
   await page.getByText('Enable Config Overrides').click();
   await page.getByRole('button', { name: 'RUN EXTRACTION' }).click();
   await page.getByRole('button', { name: 'SAVE', exact: true }).click();
-  await expect.poll(() => saves.length).toBe(4);
-  expect(saves[3]).not.toHaveProperty('browser_engine');
-  expect(saves[3]).not.toHaveProperty('use_browser_scraper');
+  await expect.poll(() => saves.length).toBe(5);
+  expect(saves[4]).not.toHaveProperty('browser_engine');
+  expect(saves[4]).not.toHaveProperty('use_browser_scraper');
 });

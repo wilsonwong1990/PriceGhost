@@ -63,10 +63,8 @@ export default function Debug() {
         domain,
         name: state.result.retailerName,
         use_proxy: state.config.use_proxy,
-        use_browser_scraper: state.useOverride ? state.config.use_browser_scraper : undefined,
-        browser_engine: state.useOverride && state.config.use_browser_scraper
-          ? state.config.browser_engine || 'chromium'
-          : undefined,
+        use_browser_scraper: state.resultBrowserSettings?.use_browser_scraper,
+        browser_engine: state.resultBrowserSettings?.browser_engine,
         user_agent: state.config.user_agent,
         price_selectors: state.tempPriceSelectors,
         retailer_name_selectors: state.tempRetailerNameSelectors,
