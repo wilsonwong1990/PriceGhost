@@ -40,6 +40,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Corrected Firefox pool reservations, request language headers, debug engine
   saves, and proxy credential redaction for SOCKS URLs.
 
+- GitHub Copilot AI provider. Authenticate with a fine-grained personal access
+  token that has the Copilot Requests permission, entered under Admin -> AI
+  Engine. The token is stored write-only, and the model list can be synced from
+  the token's Copilot plan. Requests run through the bundled GitHub Copilot SDK in a
+  restricted runtime process with every tool disabled, and each session is
+  deleted once the reply is received (best-effort).
+- Copilot Auto routing preferences and Fusion Standard, High, and Max tiers can
+  be selected in Admin when available to the token owner's account.
+
+### Fixed
+
+- General system settings responses no longer expose stored AI API keys.
+- Copilot requests and model discovery now time out, honor environment
+  telemetry opt-outs, and show actionable token errors and premium-request
+  costs in Admin. Stored GitHub tokens are write-only.
+- Copilot failures retain safe status categories for retry and logging. Custom
+  model identifiers can be edited without losing focus, and Cancel remains
+  available when only the picker mode differs from the saved model.
+
 ## [2.2.0-beta.3] - 2026-11-15
 
 ### Added

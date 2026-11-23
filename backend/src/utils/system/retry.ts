@@ -15,6 +15,8 @@ const DEFAULT_OPTIONS: Required<RetryOptions> = {
   maxDelay: 30000,
   factor: 2,
   retryCondition: (error: any) => {
+    if (error?.retryable === false) return false;
+
     const errorMsg = error?.message?.toLowerCase() || '';
     // Abort retry immediately for billing or quota depletion
     if (errorMsg.includes('prepayment credits are depleted') || errorMsg.includes('billing') || errorMsg.includes('quota exceeded')) {
@@ -66,7 +68,8 @@ export async function withRetry<T>(
       }
 
       const errorMsg = error.response?.data?.error?.message || error.message || 'Unknown error';
-      const status = error.response?.status ? ` (${error.response.status})` : '';
+      const statusCode = error.response?.status || error.status;
+      const status = statusCode ? ` (${statusCode})` : '';
       
       logger.warn(
         `${category} | ${context} | Attempt ${attempt} failed${status}: ${errorMsg}. Retrying in ${currentDelay}ms...`,

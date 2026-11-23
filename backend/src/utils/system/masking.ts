@@ -31,7 +31,7 @@
 const MASK_MARKERS = ['...', '*'] as const;
 
 /** Replaces a short key wholesale: four-and-four would leave nothing hidden. */
-const MASK_WHOLESALE = '********';
+export const MASK_WHOLESALE = '********';
 
 /** Below this length, keeping the first and last four characters reveals the key. */
 const MIN_LENGTH_FOR_PARTIAL_MASK = 8;
@@ -59,4 +59,10 @@ export function maskSecret(secret: string | null | undefined): string | null {
 export function isMaskedSecret(value: unknown): boolean {
   if (typeof value !== 'string' || value === '') return false;
   return MASK_MARKERS.some((marker) => value.includes(marker));
+}
+
+export function assertValidCopilotTokenInput(value: unknown): void {
+  if (isMaskedSecret(value) && value !== MASK_WHOLESALE) {
+    throw Object.assign(new Error('Enter a new GitHub token without the saved-token placeholder.'), { statusCode: 400 });
+  }
 }

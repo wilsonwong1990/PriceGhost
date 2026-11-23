@@ -1,13 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { AIModel } from '../../../../types/api';
 import Icon from '../../../../components/Icon';
+
+const NO_BUILT_IN_MODELS: AIModel[] = [];
 
 interface ModelSelectorProps {
   providerName: string;
   label?: string;
   value: string;
   onChange: (value: string) => void;
+  onCustomModeChange?: (isCustomMode: boolean) => void;
   models: AIModel[];
+  builtInModels?: AIModel[];
+  resetKey?: number;
   onSync: () => void | Promise<void>;
   isSyncing: boolean;
   canSync: boolean;
@@ -20,30 +25,41 @@ export default function ModelSelector({
   label = 'Primary Model',
   value,
   onChange,
+  onCustomModeChange,
   models,
+  builtInModels = NO_BUILT_IN_MODELS,
+  resetKey = 0,
   onSync,
   isSyncing,
   canSync,
   syncDisabledTooltip = 'Enter credentials before syncing',
   customPlaceholder = 'Enter custom model identifier...',
 }: ModelSelectorProps) {
+  const choices = [...builtInModels, ...models.filter(model => !builtInModels.some(builtIn => builtIn.id === model.id))];
   // Determine if the current value is not among the discovered models
-  const isValueKnown = models.some(m => m.id === value);
+  const isValueKnown = choices.some(m => m.id === value);
   const [isCustomMode, setIsCustomMode] = useState<boolean>(!isValueKnown && Boolean(value));
+  const lastEmittedValue = useRef(value);
+  const previousResetKey = useRef(resetKey);
 
-  // Keep custom mode in sync if value or models change externally
+  // Locally emitted edits stay in custom mode; external restores and Cancel reset it.
   useEffect(() => {
-    if (value && !models.some(m => m.id === value)) {
-      setIsCustomMode(true);
+    if (value !== lastEmittedValue.current || resetKey !== previousResetKey.current) {
+      setIsCustomMode(Boolean(value) && !choices.some(m => m.id === value));
     }
-  }, [value, models]);
+    lastEmittedValue.current = value;
+    previousResetKey.current = resetKey;
+  }, [value, models, builtInModels, resetKey]);
 
   const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = e.target.value;
     if (selected === '__custom__') {
       setIsCustomMode(true);
+      onCustomModeChange?.(true);
     } else {
       setIsCustomMode(false);
+      onCustomModeChange?.(false);
+      lastEmittedValue.current = selected;
       onChange(selected);
     }
   };
@@ -69,7 +85,7 @@ export default function ModelSelector({
           onChange={handleSelectChange}
         >
           <option value="" disabled>Select a model...</option>
-          {models.map(m => (
+          {choices.map(m => (
             <option key={m.id} value={m.id}>
               {m.name || m.id}
             </option>
@@ -94,7 +110,12 @@ export default function ModelSelector({
             type="text"
             className="form-control"
             value={value}
-            onChange={e => onChange(e.target.value)}
+            onChange={e => {
+              const nextValue = e.target.value;
+              lastEmittedValue.current = nextValue;
+              onCustomModeChange?.(true);
+              onChange(nextValue);
+            }}
             placeholder={customPlaceholder}
             autoFocus={!value}
           />

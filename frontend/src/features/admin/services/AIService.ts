@@ -21,5 +21,7 @@ export const AIService = {
   testAnthropic: (api_key: string, model?: string) => api.post<AIProviderTestResult>('/admin/settings/ai/test-anthropic', { api_key, model }),
   testOpenAI: (api_key: string, model?: string) => api.post<AIProviderTestResult>('/admin/settings/ai/test-openai', { api_key, model }),
   testOpenRouter: (api_key: string, model?: string) => api.post<AIProviderTestResult>('/admin/settings/ai/test-openrouter', { api_key, model }),
+  testCopilot: (api_key: string, model?: string, tiers?: { copilot_auto_tier?: string | null; copilot_fusion_tier?: string | null }) =>
+    api.post<AIProviderTestResult>('/admin/settings/ai/test-copilot', { api_key, model, ...tiers }),
   testOpenAICompatible: (base_url: string, model: string, api_key?: string) => api.post<AIProviderTestResult>('/admin/settings/ai/test-openai-compatible', { base_url, model, api_key }),
 };

@@ -135,6 +135,7 @@ Multiple providers supported, from cloud APIs to local models. AI extraction kic
 | **Google Vertex AI** | [console.cloud.google.com](https://console.cloud.google.com) | Gemini via Vertex | GCP billing |
 | **Groq** | [console.groq.com](https://console.groq.com/keys) | Llama 3.3 70B Versatile | **Free tier** |
 | **OpenRouter** | [openrouter.ai](https://openrouter.ai/keys) | Any compatible model | Usage-based |
+| **GitHub Copilot** | [github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens) (fine-grained token with Copilot Requests) | `auto` | Copilot premium requests |
 | **DeepSeek** | [platform.deepseek.com](https://platform.deepseek.com) | `deepseek-chat` | Low cost |
 | **Mistral** | [console.mistral.ai](https://console.mistral.ai) | `mistral-large-latest` | Paid |
 | **Ollama (local)** | [ollama.ai](https://ollama.ai) | `ollama pull qwen3` | **Free**, local compute |
