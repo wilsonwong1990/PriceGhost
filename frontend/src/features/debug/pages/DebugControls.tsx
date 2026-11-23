@@ -1,6 +1,6 @@
 import React from 'react';
 import { PRESET_USER_AGENTS } from '../../admin/components';
-import { RetailerConfig } from '../../../types/api';
+import { RetailerConfig, RetailerBrowserEngine } from '../../../types/api';
 import Icon from '../../../components/Icon';
 
 interface DebugControlsProps {
@@ -147,6 +147,16 @@ export default function DebugControls({ state, actions, children }: DebugControl
                 <label className="toggle-label" style={{ whiteSpace: 'nowrap', minWidth: '80px' }}><input type="checkbox" checked={config.use_proxy || false} onChange={e => setConfig({...config, use_proxy: e.target.checked})} /> Proxy</label>
                 <label className="toggle-label" style={{ whiteSpace: 'nowrap', minWidth: '120px' }}><input type="checkbox" checked={config.use_browser_scraper || false} onChange={e => setConfig({...config, use_browser_scraper: e.target.checked})} /> Browser Scraper</label>
               </div>
+
+              {config.use_browser_scraper && (
+                <div className="form-group mb-3">
+                  <label htmlFor="debug-browser-engine">Browser Engine</label>
+                  <select id="debug-browser-engine" className="form-control workstation-input" value={config.browser_engine || 'chromium'} onChange={e => setConfig({ ...config, browser_engine: e.target.value as RetailerBrowserEngine })}>
+                    <option value="chromium">Chromium (default)</option>
+                    <option value="firefox">Firefox</option>
+                  </select>
+                </div>
+              )}
               
               {children}
             </div>

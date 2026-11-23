@@ -3,9 +3,8 @@
  */
 export const scrubUrlCredentials = (val: string): string => {
   if (typeof val !== 'string') return val;
-  return val.replace(/(https?:\/\/)([^/?#\s]*@)/gi, (_match, scheme: string, userinfo: string) =>
-    `${scheme}${userinfo.includes(':') ? '[REDACTED]:[REDACTED]' : '[REDACTED]'}@`
-  );
+  return val.replace(/(\b(?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p[\t\r\n]*s?[\t\r\n]*:[/\\\t\r\n]*|[a-z][a-z0-9+.\-\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/))([^/?#]+)@/gi,
+    (_match, scheme: string, userinfo: string) => `${scheme}${userinfo.includes(':') ? '[REDACTED]:[REDACTED]' : '[REDACTED]'}@`);
 };
 
 /**
@@ -40,10 +39,18 @@ export const scrubSensitiveData = (data: any): any => {
       if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
         if (key.toLowerCase().includes('proxy') && typeof val === 'boolean') {
           scrubbed[key] = val;
-        } else if (typeof val === 'string') {
-          if (val.match(/https?:\/\//i)) {
-            scrubbed[key] = scrubUrlCredentials(val);
-          } else {
+        } else if (/^(proxy_?url)$/i.test(key) && typeof val === 'string') {
+          try {
+            const parsed = new URL(val);
+            if (parsed.pathname && parsed.pathname !== '/' || parsed.search || parsed.hash) {
+              scrubbed[key] = '[REDACTED]';
+            } else {
+              const credentials = parsed.username || parsed.password
+                ? (parsed.password ? '[REDACTED]:[REDACTED]@' : '[REDACTED]@')
+                : '';
+              scrubbed[key] = `${parsed.protocol}//${credentials}${parsed.host}`;
+            }
+          } catch {
             scrubbed[key] = '[REDACTED]';
           }
         } else {

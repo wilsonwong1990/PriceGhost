@@ -7,7 +7,7 @@ import {
   PageNotAvailableError,
   resolveUserAgent
 } from '../transport';
-import { RetailerConfig } from '../../../models';
+import { RetailerConfig, type RetailerBrowserEngine } from '../../../models';
 import { scrubUrlCredentials } from '../../../utils/system/logging/scrubber';
 
 /**
@@ -39,6 +39,12 @@ export interface RemoteScraperOptions {
   /** How many auto-resolve attempts to make before returning the wall (issue #235). */
   interstitialRetries?: number;
   amazonCartMode?: 'auto' | 'required';
+  /**
+   * Sent only for a non-default engine, so a Chromium retailer's request is
+   * byte-for-byte what it was before engines existed and still works against
+   * an older scraper image.
+   */
+  browserEngine?: RetailerBrowserEngine;
 }
 
 export interface RemoteAcquisitionOptions {
@@ -49,6 +55,7 @@ export interface RemoteAcquisitionOptions {
   extractionSteps: string[];
   requestId?: string;
   onFinalUrl?: (url: string) => void;
+  onEngine?: (engine: RetailerBrowserEngine | undefined) => void;
 }
 
 /**
@@ -64,7 +71,7 @@ export interface RemoteAcquisitionOptions {
  * browser is how a BLOCKED page gets mistaken for a product page.
  */
 export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Promise<string | null> {
-  const { url, domain, domainConfig, productId, extractionSteps, requestId } = options;
+  const { url, domain, domainConfig, productId, extractionSteps, requestId, onEngine } = options;
   
   const rsUrl = await settingsCache.getRemoteScraperUrl();
   if (!rsUrl) {
@@ -81,9 +88,9 @@ export async function acquireRemoteHtml(options: RemoteAcquisitionOptions): Prom
     // "Custom" now means the retailer's own override; the resolved system
     // default is no longer indistinguishable from sending nothing at all.
     logger.debug(`Scraper | Remote | Details | UA: ${remoteOptions.userAgent}, Proxy: ${remoteOptions.proxyUrl || 'None'}, Ref: ${remoteOptions.referrer || 'None'}`, 'Scraper');
-    extractionSteps.push(`Scraper | Remote | UA: ${domainConfig?.user_agent ? 'Custom' : 'Default'} | Proxy: ${remoteOptions.proxyUrl ? 'Yes' : 'No'}`);
+    extractionSteps.push(`Scraper | Remote | UA: ${domainConfig?.user_agent ? 'Custom' : 'Default'} | Proxy: ${remoteOptions.proxyUrl ? 'Yes' : 'No'} | Engine: ${remoteOptions.browserEngine === 'firefox' ? 'Firefox' : 'Chromium'}`);
     
-    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions, options.onFinalUrl);
+    const html = await fetchRemoteHtml(url, rsUrl, remoteOptions, options.onFinalUrl, onEngine);
     extractionSteps.push(`Scraper | Remote | Success`);
     return html;
   } catch (e) {
@@ -115,6 +122,9 @@ async function buildRemoteOptions(options: RemoteAcquisitionOptions, amazonCartM
     remoteOptions.useProxy = true;
     remoteOptions.proxyUrl = proxy;
   }
+  if (domainConfig?.browser_engine === 'firefox') {
+    remoteOptions.browserEngine = 'firefox';
+  }
   if (amazonCartMode) {
     remoteOptions.amazonCartMode = amazonCartMode;
   } else {
@@ -143,5 +153,7 @@ export async function acquireRemoteAmazon(
     logger.warn('Amazon cart verification requires the configured proxy', 'Scraper', { requestId: options.requestId });
     return null;
   }
-  return fetchRemoteScrape(options.url, rsUrl, remoteOptions);
+  const result = await fetchRemoteScrape(options.url, rsUrl, remoteOptions);
+  options.extractionSteps.push(`Amazon | Cart | Browser engine: ${result.browserEngine || 'unreported'}`);
+  return result;
 }

@@ -258,6 +258,9 @@ export interface NotificationSettings {
   webhook_sends_plain_text: boolean;
 }
 
+/** The browsers the Browser Scraper can drive; mirrors the backend list. */
+export type RetailerBrowserEngine = 'chromium' | 'firefox';
+
 export interface RetailerConfig {
   id: number;
   domain: string;
@@ -265,6 +268,8 @@ export interface RetailerConfig {
   status: string | null;
   use_proxy: boolean;
   use_browser_scraper: boolean;
+  /** Which browser the Browser Scraper uses for this retailer. */
+  browser_engine: RetailerBrowserEngine;
   currency_hint: string | null;
   name_selectors: string[];
   retailer_name_selectors: string[];

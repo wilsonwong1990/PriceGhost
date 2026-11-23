@@ -1,12 +1,44 @@
 import { describe, it, expect } from 'vitest';
 import { scrubSensitiveData, scrubUrlCredentials } from '../../src/utils/system/logging/scrubber';
+import { scrubUrlCredentials as scrubScraperUrl } from '../../../scraper/src/utils/scrub';
 
 describe('Scrubber Unit Tests', () => {
   describe('scrubUrlCredentials', () => {
+    it.each(['http', 'https', 'socks', 'socks4', 'socks5', 'socks5h'])('redacts %s userinfo in both services', scheme => {
+      for (const scrub of [scrubUrlCredentials, scrubScraperUrl]) {
+        expect(scrub(`proxy ${scheme}://user:secret@proxy.example:1080`))
+          .toBe(`proxy ${scheme}://[REDACTED]:[REDACTED]@proxy.example:1080`);
+        expect(scrub(`${scheme}://user@proxy.example:1080`))
+          .toBe(`${scheme}://[REDACTED]@proxy.example:1080`);
+        expect(scrub(`${scheme}://user:sec@ret@proxy.example:1080`))
+          .toBe(`${scheme}://[REDACTED]:[REDACTED]@proxy.example:1080`);
+      }
+      expect(scrubSensitiveData({ proxyUrl: `${scheme}://user:secret@proxy.example:1080` }).proxyUrl)
+        .toBe(`${scheme}://[REDACTED]:[REDACTED]@proxy.example:1080`);
+    });
     it('should mask credentials in proxy URLs', () => {
       const url = 'http://user:pass123@example.com:8080/some/path';
       const scrubbed = scrubUrlCredentials(url);
       expect(scrubbed).toBe('http://[REDACTED]:[REDACTED]@example.com:8080/some/path');
+    });
+
+    it.each(['\t', '\n', '\r', ' '])('redacts userinfo containing whitespace in both services', whitespace => {
+      const url = `socks5://user:sec${whitespace}ret@proxy.example:1080`;
+      for (const scrub of [scrubUrlCredentials, scrubScraperUrl]) {
+        expect(scrub(`Proxy: ${url}`)).toBe('Proxy: socks5://[REDACTED]:[REDACTED]@proxy.example:1080');
+      }
+      expect(scrubSensitiveData({ proxyUrl: url }).proxyUrl)
+        .toBe('socks5://[REDACTED]:[REDACTED]@proxy.example:1080');
+    });
+
+    it.each(['http:/', 'http:', 'http:\\', 'http:\t/', 'ht\ntp://', 'socks\t5:/\n/'])('redacts normalized proxy userinfo with prefix %s', prefix => {
+      const url = `${prefix}user:secret@proxy.example:1080`;
+      for (const scrub of [scrubUrlCredentials, scrubScraperUrl]) {
+        expect(scrub(`Proxy: ${url}`)).not.toContain('secret');
+        expect(scrub(`Proxy: ${url}`)).not.toContain('user');
+      }
+      expect(scrubSensitiveData({ proxyUrl: url }).proxyUrl)
+        .toBe(`${prefix.startsWith('socks') ? 'socks5' : 'http'}://[REDACTED]:[REDACTED]@proxy.example:1080`);
     });
 
     it('should mask credentials in https target URLs', () => {
@@ -35,6 +67,17 @@ describe('Scrubber Unit Tests', () => {
       expect(scrubbed.someOtherKey).toBe('hello');
     });
 
+    it('fails closed for URL-shaped secrets and proxy paths or queries', () => {
+      expect(scrubSensitiveData({
+        password: 'ftp://secret',
+        proxyPassword: 'http://secret',
+        proxyUrl: 'http://user:pass@proxy.test/path?token=secret',
+      })).toEqual({
+        password: '[REDACTED]',
+        proxyPassword: '[REDACTED]',
+        proxyUrl: '[REDACTED]',
+      });
+    });
     it('should scrub credentials in proxy key but preserve the proxy host', () => {
       const data = {
         proxyUrl: 'http://user:pass123@proxy.com:3128',

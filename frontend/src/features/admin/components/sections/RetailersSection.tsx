@@ -29,6 +29,7 @@ export default function RetailersSection({ globalCurrencies, initialSearch }: Re
       status: 'OK',
       use_proxy: false, 
       use_browser_scraper: false,
+      browser_engine: 'chromium',
       currency_hint: null,
       active: true,
       description: ''

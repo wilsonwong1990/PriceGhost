@@ -8,6 +8,7 @@ import {
   resolveUserAgent
 } from '../transport';
 import type { RemoteScraperOptions } from './remote';
+import type { RetailerBrowserEngine } from '../../../models/types/retailer';
 
 export interface FallbackOptions {
   url: string;
@@ -18,6 +19,7 @@ export interface FallbackOptions {
   onFinalUrl?: (url: string) => void;
   /** The retailer's User-Agent override, if it has one. */
   userAgent?: string | null;
+  onEngine?: (engine: RetailerBrowserEngine | undefined) => void;
 }
 
 export interface FallbackResult {
@@ -28,7 +30,7 @@ export interface FallbackResult {
 }
 
 export async function handleAcquisitionFallback(options: FallbackOptions): Promise<FallbackResult | null> {
-  const { url, domain, productId, extractionSteps, challengeReason, userAgent } = options;
+  const { url, domain, productId, extractionSteps, challengeReason, userAgent, onEngine } = options;
   
   logger.warn(`Scraper | Block | ${challengeReason} detected. Triggering fallback for ${domain}`, 'Scraper', { product_id: productId });
   extractionSteps.push(`Scraper | Fallback | Triggered by ${challengeReason}`);
@@ -59,7 +61,7 @@ export async function handleAcquisitionFallback(options: FallbackOptions): Promi
       const defaultReferrer = await settingsCache.getDefaultReferrer();
       remoteOptions.referrer = defaultReferrer || undefined;
 
-      html = await fetchRemoteHtml(url, rsUrl, remoteOptions, options.onFinalUrl);
+      html = await fetchRemoteHtml(url, rsUrl, remoteOptions, options.onFinalUrl, onEngine);
       logger.info(`Scraper | Fallback | Remote success for ${domain}`, 'Scraper', { product_id: productId });
       extractionSteps.push(`Scraper | Fallback | Remote Success`);
       $ = load(html);

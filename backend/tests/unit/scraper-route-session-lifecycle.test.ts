@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { sessions } from '../../../scraper/src/core/SessionManager';
 import type { BrowserSession, ScrapeResult } from '../../../scraper/src/types';
+import { BrowserLaunchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
 
 /**
  * The scrape route's session lifecycle (issues #254, #255).
@@ -15,11 +16,15 @@ import type { BrowserSession, ScrapeResult } from '../../../scraper/src/types';
  * success.
  */
 
-const { scrape, releaseSession, acquired } = vi.hoisted(() => ({
-  scrape: vi.fn(),
-  releaseSession: vi.fn().mockResolvedValue(undefined),
-  acquired: { session: null as BrowserSession | null },
-}));
+const { scrape, releaseSession, acquireSession, acquired } = vi.hoisted(() => {
+  const acquired = { session: null as BrowserSession | null };
+  return {
+    scrape: vi.fn(),
+    releaseSession: vi.fn().mockResolvedValue(undefined),
+    acquireSession: vi.fn(async (_options: unknown, _signal: AbortSignal) => acquired.session),
+    acquired,
+  };
+});
 
 vi.mock('../../../scraper/src/services/ScraperService', () => ({
   ScraperService: { scrape },
@@ -27,7 +32,7 @@ vi.mock('../../../scraper/src/services/ScraperService', () => ({
 
 vi.mock('../../../scraper/src/services/SessionService', () => ({
   SessionService: {
-    acquireSession: vi.fn(async () => acquired.session),
+    acquireSession,
     releaseSession,
     getPoolStatus: () => ({ activeSessions: sessions.length, maxBrowsers: 3, totalActivePages: 0, sessions: [] }),
   },
@@ -45,10 +50,11 @@ const fakeSession = (): BrowserSession => ({
   browser: null,
   launchPromise: null,
   activePages: 1,
-  totalScrapes: 0,
+  totalScrapes: 1,
   idleTimer: null,
   proxyUrl: 'http://scraper:pa55word@192.168.50.200:8888',
   userAgent: null,
+  browserEngine: 'chromium',
   lastActivity: Date.now(),
   userDataDir: null,
   tainted: false,
@@ -60,6 +66,7 @@ const result = (over: Partial<ScrapeResult> = {}): ScrapeResult => ({
   screenshotBase64: null,
   challengeDetected: false,
   challengeUnresolved: false,
+  browserEngine: 'chromium',
   ...over,
 });
 
@@ -109,6 +116,22 @@ describe('a completed scrape keeps its session (issue #254)', () => {
 });
 
 describe('a wedged scrape retires its session (issue #254)', () => {
+  it('does not scrape and releases a reservation after disconnect during acquisition', async () => {
+    const abort = new AbortController();
+    let finish!: (session: BrowserSession | null) => void;
+    acquireSession.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const inflight = postScrape({ url: 'https://example.test/product' }, { signal: abort.signal }).catch(() => undefined);
+    await vi.waitFor(() => expect(acquireSession).toHaveBeenCalled());
+    abort.abort();
+    await vi.waitFor(() => expect(acquireSession.mock.calls[0][1].aborted).toBe(true));
+    finish(acquired.session);
+    await inflight;
+    await vi.waitFor(() => expect(acquired.session?.activePages).toBe(0));
+    expect(acquired.session?.totalScrapes).toBe(0);
+    expect(acquired.session?.tainted).toBe(false);
+    expect(scrape).not.toHaveBeenCalled();
+    if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
+  });
   it('discards the session when the client disconnects mid-scrape', async () => {
     const abort = new AbortController();
     let resolveScrape: (() => void) | undefined;
@@ -204,5 +227,63 @@ describe('the route never logs proxy credentials', () => {
     expect(logLines.some(line => line.includes('pa55word'))).toBe(false);
     expect(logLines.some(line => line.includes('[REDACTED]:[REDACTED]@192.168.50.200:8888'))).toBe(true);
     if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
+  });
+});
+
+describe('the route resolves the browser engine before taking a session', () => {
+  it('returns a conflict for a targeted session of another engine', async () => {
+    acquireSession.mockRejectedValueOnce(new TargetSessionEngineMismatchError());
+    const response = await postScrape({ url: 'https://example.test/product', options: { browserEngine: 'firefox', sessionId: 'target' } });
+    expect(response.status).toBe(409);
+    expect(scrape).not.toHaveBeenCalled();
+  });
+  it('rejects object values without invoking their toString property', async () => {
+    const response = await postScrape({
+      url: 'https://example.test/product',
+      options: { browserEngine: { toString: null } },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Unknown browserEngine: {"toString":null}' });
+    expect(acquireSession).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 for an engine the scraper does not have', async () => {
+    const response = await postScrape({
+      url: 'https://www.bigw.com.au/product/x/p/1',
+      options: { browserEngine: 'webkit' },
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'Unknown browserEngine: webkit' });
+    expect(acquireSession).not.toHaveBeenCalled();
+  });
+
+  it('asks the pool for Chromium when the request names no engine', async () => {
+    scrape.mockResolvedValue(result());
+
+    await postScrape({ url: 'https://www.bigw.com.au/product/x/p/1' });
+
+    expect(acquireSession).toHaveBeenCalledWith(expect.objectContaining({ browserEngine: 'chromium' }), expect.any(AbortSignal));
+    if (acquired.session?.idleTimer) clearTimeout(acquired.session.idleTimer);
+  });
+
+  it('answers 500, not the retryable 503, when the browser cannot launch', async () => {
+    // A missing Firefox binary is not a busy pool: retrying it three times
+    // with backoff, as the backend does for 503, cannot succeed.
+    acquireSession.mockRejectedValueOnce(
+      new BrowserLaunchError('firefox', new Error('Browser was not found at the configured executablePath'))
+    );
+
+    const response = await postScrape({
+      url: 'https://www.bigw.com.au/product/x/p/1',
+      options: { browserEngine: 'firefox' },
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Could not launch firefox: Browser was not found at the configured executablePath',
+    });
+    expect(scrape).not.toHaveBeenCalled();
   });
 });

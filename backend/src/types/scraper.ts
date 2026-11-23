@@ -1,6 +1,11 @@
 import { ParsedPrice } from '../utils/scraping/priceParser';
 import type { UnavailableReason } from './availability';
 import type { AmazonCartObservation } from '../services/scraper/acquisition/amazon';
+import type { RetailerBrowserEngine } from '../models/types/retailer';
+
+export type AcquisitionMetadata =
+  | { mode: 'http' | 'bypass' }
+  | { mode: 'browser'; browserEngine?: RetailerBrowserEngine };
 
 export type StockStatus = 'in_stock' | 'out_of_stock' | 'pre_order' | 'not_available' | 'member_only' | 'unknown';
 export type AIStatus = 'verified' | 'corrected' | 'confirmed' | null;
@@ -48,6 +53,7 @@ export type ScrapeFailureReason =
 export type ReviewReason = 'no_consensus' | 'ai_correction' | 'oos_guardrail' | 'manual_rescan' | 'first_scan' | 'missing_currency';
 
 export interface ScrapedProductWithVoting extends ScrapedProduct {
+  acquisition?: AcquisitionMetadata;
   priceCandidates: PriceCandidate[];
   nameCandidates?: ExtractionCandidate[];
   imageCandidates?: ExtractionCandidate[];

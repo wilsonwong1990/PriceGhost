@@ -100,6 +100,7 @@ Houses the extraction selectors and custom routing rules. **Strictly no retailer
 * **Key Fields**:
  - `domain` (unique primary lookup key, e.g. `amazon.com.au`).
  - `use_browser_scraper`: Offloads page rendering to the `scraper` service.
+ - `browser_engine`: Which browser the `scraper` service uses for the retailer, `chromium` (default) or `firefox`. Constrained by a `CHECK`; added in migration 026.
  - `currency_hint`: Default fallback currency for parser.
  - **JSONB Arrays**: Standardized selectors for `name_selectors`, `retailer_name_selectors`, `price_selectors`, `deal_price_selectors`, `member_price_selectors`, `pre_order_price_selectors`, `original_price_selectors`, `image_selectors`, `stock_selectors`, `exclusion_selectors`.
  - `in_stock_phrases`, `out_of_stock_phrases`, `pre_order_phrases`, `member_only_phrases`: Evaluated availability phrases.

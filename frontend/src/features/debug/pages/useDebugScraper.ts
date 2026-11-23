@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { AdminSystemService, RetailerAdminService } from '../../admin';
 import { ProductService } from '../../products/services/ProductService';
-import { RetailerConfig, SystemSettings } from '../../../types/api';
+import { RetailerBrowserEngine, RetailerConfig, SystemSettings } from '../../../types/api';
 import { useToast } from '../../../context/ToastContext';
 import { apiErrorMessage } from '../../../api/error';
 import { evaluateLiveSelector, LiveSelectorResult } from '../utils/liveSelector';
@@ -22,6 +22,10 @@ export function useDebugScraper() {
   const [globalSettings, setGlobalSettings] = useState<SystemSettings | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
+  const [resultContext, setResultContext] = useState<{
+    url: string;
+    acquisition?: { mode: 'browser' | 'http' | 'bypass'; browserEngine?: RetailerBrowserEngine };
+  } | null>(null);
   
   // Permissions
   const [isEnabled, setIsEnabled] = useState<boolean | null>(null);
@@ -182,6 +186,7 @@ export function useDebugScraper() {
 
     setIsLoading(true);
     setResult(null);
+    setResultContext(null);
 
     let processedUrl = url.trim();
     if (!/^https?:\/\//i.test(processedUrl)) {
@@ -263,6 +268,7 @@ export function useDebugScraper() {
     try {
       const res = await RetailerAdminService.debugExtract(processedUrl, finalConfig, mode, returnHtml, useAI, forceAI);
       setResult(res);
+      setResultContext({ url: processedUrl, acquisition: res.acquisition });
       
       // Save to history
       try {
@@ -291,6 +297,7 @@ export function useDebugScraper() {
       forceAI, setForceAI,
       isLoading,
       result, setResult,
+      resultContext,
       isEnabled,
       recentUrls,
       isFetchingConfig,

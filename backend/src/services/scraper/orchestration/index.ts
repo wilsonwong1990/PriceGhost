@@ -93,6 +93,7 @@ export async function scrapeProductWithVoting(
     });
 
     html = acqResult.html;
+    result.acquisition = acqResult.acquisition;
     $ = acqResult.$;
     let challenge = acqResult.challengeReason;
     if (acqResult.amazonCart?.required) result.amazonCartRequired = true;

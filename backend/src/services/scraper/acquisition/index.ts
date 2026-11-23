@@ -1,6 +1,8 @@
 import { load, type CheerioAPI } from 'cheerio';
 import { detectBotChallenge, PageNotAvailableError, RemoteCartCapabilityUnavailable } from '../transport';
 import { RetailerConfig } from '../../../models';
+import type { AcquisitionMetadata } from '../../../types/scraper';
+import type { RetailerBrowserEngine } from '../../../models/types/retailer';
 
 import { acquireRemoteAmazon, acquireRemoteHtml } from './remote';
 import { acquireStandardHtml, BotChallengeError } from './standard';
@@ -26,6 +28,7 @@ export interface AcquisitionResult {
   learnedFlags: any;
   amazonCart?: { required: boolean; observation: AmazonCartObservation | null; metadata?: { name: string | null; imageUrl: string | null } };
   cartStatusOnly?: boolean;
+  acquisition?: AcquisitionMetadata;
 }
 
 export async function acquireHtml(options: AcquisitionOptions): Promise<AcquisitionResult> {
@@ -60,12 +63,17 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
       html: '', $: load(''), challengeReason: null, usedRemoteFallback: false, learnedFlags: {},
       amazonCart: { required: true, observation, metadata: observation ? readAmazonCartMetadata(remote?.amazonCart) : undefined },
       cartStatusOnly: !observation,
+      acquisition: remote ? { mode: 'browser', browserEngine: remote.browserEngine } : undefined,
     };
   }
   let html = '';
   let learnedFlags: any = {};
   let challengeReason: string | null = null;
   let usedRemoteFallback = false;
+  let browserEngine: RetailerBrowserEngine | undefined;
+  let acquisition: AcquisitionMetadata | undefined;
+  const onEngine = (engine: RetailerBrowserEngine | undefined) => { browserEngine = engine; };
+
   const useBrowserScraper = domainConfig?.use_browser_scraper || false;
 
   // Set when the retailer asks for the browser scraper but this install has no
@@ -79,12 +87,13 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
   if (useBrowserScraper) {
     usedRemoteFallback = true;
     learnedFlags = { use_browser_scraper: true };
-    const remoteHtml = await acquireRemoteHtml(options);
+    const remoteHtml = await acquireRemoteHtml({ ...options, onEngine });
     if (remoteHtml === null) {
       remoteScraperUnavailable = true;
       usedRemoteFallback = false;
     } else if (remoteHtml) {
       html = remoteHtml;
+      acquisition = { mode: 'browser', browserEngine };
     }
   }
 
@@ -99,6 +108,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
         extractionSteps,
         requestId,
       });
+      if (html) acquisition = { mode: 'http' };
     } catch (e) {
       if (e instanceof BotChallengeError) {
         challengeReason = e.message;
@@ -127,6 +137,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
       productId,
       extractionSteps,
       challengeReason,
+      onEngine
       // No retailer override to pass: this branch only runs when the domain has
       // no config, so the system default is the right identity -- and is the
       // one the HTTP attempt just used.
@@ -136,6 +147,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
       return {
         ...fallbackResult,
         usedRemoteFallback: true,
+        acquisition: { mode: 'browser', browserEngine }
       };
     }
     // Deliberately no `learnedFlags = { use_browser_scraper: true }` here.
@@ -149,7 +161,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
     // stay self-healing on the next scrape.
   }
 
-  return { html, $, challengeReason, usedRemoteFallback, learnedFlags };
+  return { html, $, challengeReason, usedRemoteFallback, learnedFlags, acquisition };
 }
 
 function checkSoft404($: CheerioAPI, html: string, extractionSteps: string[]) {
