@@ -1,4 +1,5 @@
 import { ItemWithListings, Product, StockStatus } from '../../../../types/api';
+import { stockStatusForDisplay } from '../../../../utils/availability';
 import { STOCK_STATUS_BY_AVAILABILITY, StockFilter, TrackingFilter } from './utils';
 
 /**
@@ -49,8 +50,10 @@ export function isListingPaused(listing: Pick<Product, 'checking_paused'>): bool
  * status this build has not heard of is an honest "we do not know", which is a
  * filter value of its own.
  */
-export function listingStockStatus(listing: Pick<Product, 'stock_status'>): StockStatus {
-  const raw: unknown = listing.stock_status;
+export function listingStockStatus(
+  listing: Pick<Product, 'stock_status'> & Partial<Pick<Product, 'preferred_extraction_method' | 'unavailable_reason'>>,
+): StockStatus {
+  const raw: unknown = stockStatusForDisplay(listing);
   return STOCK_STATUS_BY_AVAILABILITY.find(status => status === raw) ?? 'unknown';
 }
 
@@ -63,7 +66,7 @@ export function matchesTrackingFilter(
 }
 
 export function matchesStockFilter(
-  listing: Pick<Product, 'stock_status'>,
+  listing: Pick<Product, 'stock_status'> & Partial<Pick<Product, 'preferred_extraction_method' | 'unavailable_reason'>>,
   filter: StockFilter,
 ): boolean {
   if (filter === 'all') return true;

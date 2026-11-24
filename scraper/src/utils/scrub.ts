@@ -13,3 +13,20 @@
 export const scrubUrlCredentials = (value: string): string =>
   value.replace(/(\b(?:h[\t\r\n]*t[\t\r\n]*t[\t\r\n]*p[\t\r\n]*s?[\t\r\n]*:[/\\\t\r\n]*|[a-z][a-z0-9+.\-\t\r\n]*:[\t\r\n]*\/[\t\r\n]*\/))([^/?#]+)@/gi,
     (_match, scheme: string, userinfo: string) => `${scheme}${userinfo.includes(':') ? '[REDACTED]:[REDACTED]' : '[REDACTED]'}@`);
+
+export function scrubLogMetadata(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === 'string') return scrubUrlCredentials(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[CIRCULAR]';
+  seen.add(value);
+  if (value instanceof Error) {
+    return { name: value.name, message: scrubUrlCredentials(value.message), stack: value.stack && scrubUrlCredentials(value.stack) };
+  }
+  if (Array.isArray(value)) return value.map(item => scrubLogMetadata(item, seen));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    /password|token|secret|authorization|cookie|body|postdata/i.test(key)
+      ? '[REDACTED]'
+      : scrubLogMetadata(item, seen),
+  ]));
+}

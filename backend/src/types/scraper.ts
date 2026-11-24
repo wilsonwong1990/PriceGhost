@@ -1,5 +1,6 @@
 import { ParsedPrice } from '../utils/scraping/priceParser';
 import type { UnavailableReason } from './availability';
+import type { AmazonCartObservation } from '../services/scraper/acquisition/amazon';
 import type { RetailerBrowserEngine } from '../models/types/retailer';
 
 export type AcquisitionMetadata =
@@ -46,6 +47,7 @@ export type ScrapeFailureReason =
   | 'page_unavailable'
   | 'auto_map_rejected'
   | 'browser_scraper_failed'
+  | 'cart_price_unavailable'
   | 'variant_selection_required'
   | 'no_price_found';
 
@@ -75,6 +77,9 @@ export interface ScrapedProductWithVoting extends ScrapedProduct {
    * opposite treatment during a refresh.
    */
   unavailableReason?: UnavailableReason;
+  /** Internal evidence from the isolated browser, never accepted from a confirmation request. */
+  amazonCartObservation?: AmazonCartObservation;
+  amazonCartRequired?: boolean;
 }
 
-export type ExtractionMethod = 'json-ld' | 'site-specific' | 'generic-css' | 'custom-css' | 'custom-regex' | 'ai' | 'generic' | 'deal-price' | 'member-price' | 'pre-order-price' | 'original-price';
+export type ExtractionMethod = 'json-ld' | 'site-specific' | 'generic-css' | 'custom-css' | 'custom-regex' | 'ai' | 'generic' | 'deal-price' | 'member-price' | 'pre-order-price' | 'original-price' | 'amazon-cart';

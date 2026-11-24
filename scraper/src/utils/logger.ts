@@ -4,6 +4,7 @@
 
 import type { LogContext } from '../types.js';
 import { formatLogTimestamp } from './timestamp.js';
+import { scrubLogMetadata, scrubUrlCredentials } from './scrub.js';
 
 const LEVELS = {
   DEBUG: 0,
@@ -38,7 +39,7 @@ export function log(message: string, type: string = 'INFO', context: LogContext 
   if (context.requestId) ctxStr += ` [${context.requestId}]`;
   if (context.productId) ctxStr += ` [PROD-${context.productId}]`;
   
-  const output = `[${timestamp}] ${typeStr} |${ctxStr} ${message}`;
+  const output = `[${timestamp}] ${typeStr} |${ctxStr} ${scrubUrlCredentials(message)}`;
   
   if (levelValue >= LEVELS.ERROR) {
     console.error(output);
@@ -48,6 +49,6 @@ export function log(message: string, type: string = 'INFO', context: LogContext 
 
   // If there's extra metadata, log it as an object
   if (context.metadata) {
-    console.dir(context.metadata, { depth: null, colors: true });
+    console.dir(scrubLogMetadata(context.metadata), { depth: null, colors: true });
   }
 }

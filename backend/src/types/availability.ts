@@ -25,7 +25,11 @@ export type UnavailableReason =
   | 'connection_failure'
   | 'remote_scraper_failure'
   | 'bot_or_challenge'
+  | 'amazon_cart_price_unavailable'
+  | 'amazon_selection_unverified'
   | 'unknown_scrape_failure';
+
+export const PAGE_GONE_THRESHOLD = 3;
 
 const DEFINITIVE: ReadonlySet<UnavailableReason> = new Set<UnavailableReason>([
   'http_404',
@@ -57,6 +61,8 @@ const DESCRIPTIONS: Record<UnavailableReason, string> = {
   connection_failure: 'The connection to the retailer failed',
   remote_scraper_failure: 'The browser scraper could not fetch the page',
   bot_or_challenge: 'The retailer served a bot check instead of the product page',
+  amazon_cart_price_unavailable: 'The new Amazon cart price could not be verified',
+  amazon_selection_unverified: 'The Amazon URL selection could not be verified',
   unknown_scrape_failure: 'The page could not be read',
 };
 

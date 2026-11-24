@@ -35,6 +35,7 @@ describe('Firefox page headers', () => {
       goto: vi.fn().mockResolvedValue(undefined),
       title: vi.fn().mockResolvedValue('Product'),
       content: vi.fn().mockResolvedValue('<html>Product</html>'),
+      url: vi.fn().mockReturnValue('https://example.test/product'),
       close: vi.fn().mockResolvedValue(undefined),
     };
     const session = {

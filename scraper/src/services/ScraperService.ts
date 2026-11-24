@@ -7,6 +7,7 @@ import { DEFAULT_SCRAPER_USER_AGENT } from '../core/SessionManager.js';
 import { buildChallengePattern, looksLikeChallenge } from '../utils/challenge.js';
 import { allocateScrapeBudget, createBudgetClock, CHALLENGE_POLL_INTERVAL_MS } from '../utils/budget.js';
 import { waitForChallengeToClear } from '../utils/challengeWait.js';
+import { scrapeAmazonCart } from './AmazonCart.js';
 
 /**
  * Chromium identity is applied per page over CDP: the User-Agent, its client
@@ -82,6 +83,10 @@ export class ScraperService {
     options: ScrapeOptions = {},
     abortSignal?: AbortSignal,
   ): Promise<ScrapeResult | null> {
+    if (options.amazonCartMode) {
+      return scrapeAmazonCart(url, session, options, abortSignal);
+    }
+
     let page: ScraperPage | null = null;
     const context = {
       requestId: options.requestId,
@@ -287,7 +292,7 @@ export class ScraperService {
         screenshotBase64 = await page.screenshot({ encoding: 'base64', fullPage: false });
       }
 
-      return { html, screenshotBase64, challengeDetected, challengeUnresolved, browserEngine: session.browserEngine };
+      return { html, screenshotBase64, finalUrl: page.url(), challengeDetected, challengeUnresolved, browserEngine: session.browserEngine };
 
     } catch (error) {
       if (!abortSignal?.aborted) {

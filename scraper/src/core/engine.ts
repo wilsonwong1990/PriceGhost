@@ -53,6 +53,13 @@ export class TargetSessionEngineMismatchError extends Error {
   }
 }
 
+export class TargetSessionCartGuardMismatchError extends Error {
+  constructor() {
+    super('Target session uses different Amazon cart scripting guards');
+    this.name = 'TargetSessionCartGuardMismatchError';
+  }
+}
+
 /**
  * Whether Firefox should present the configured User-Agent.
  *
@@ -120,10 +127,12 @@ export function firefoxProxyPrefs(proxyUrl: string): Record<string, FirefoxPrefV
 /** Preferences a Firefox session is launched with. */
 export function buildFirefoxPrefs(
   proxyUrl: string | null,
-  userAgent: string | null
+  userAgent: string | null,
+  amazonCartOnly = false
 ): Record<string, FirefoxPrefValue> {
   return {
     ...(proxyUrl ? firefoxProxyPrefs(proxyUrl) : {}),
     ...(shouldApplyUserAgentToFirefox(userAgent) ? { 'general.useragent.override': userAgent } : {}),
+    ...(amazonCartOnly ? { 'javascript.enabled': false, 'dom.serviceWorkers.enabled': false } : {}),
   };
 }

@@ -7,11 +7,13 @@ import { stockHistoryQuery } from '../../../../api/queries';
 
 interface StockAvailabilitySectionProps {
   productId: number;
+  currentStockUnverified?: boolean;
 }
 
-const StockAvailabilitySection: React.FC<StockAvailabilitySectionProps> = ({ productId }) => {
+const StockAvailabilitySection: React.FC<StockAvailabilitySectionProps> = ({ productId, currentStockUnverified = false }) => {
   const stockQuery = useQuery(stockHistoryQuery(productId, 30));
-  const history = stockQuery.data?.history ?? [];
+  const allHistory = stockQuery.data?.history ?? [];
+  const history = currentStockUnverified ? allHistory.filter(entry => entry.id !== 0) : allHistory;
   const stats = stockQuery.data?.stats ?? null;
 
   if (stockQuery.isLoading) {
@@ -30,7 +32,7 @@ const StockAvailabilitySection: React.FC<StockAvailabilitySectionProps> = ({ pro
     );
   }
 
-  if (!stats || history.length === 0) {
+  if ((!stats && !currentStockUnverified) || history.length === 0) {
     return (
       <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
         No stock history recorded yet.
@@ -40,7 +42,11 @@ const StockAvailabilitySection: React.FC<StockAvailabilitySectionProps> = ({ pro
 
   return (
     <div className="stock-availability-section">
-      <StockTimeline history={history} stats={stats} days={30} />
+      {currentStockUnverified ? (
+        <p>Current stock is unverified. Availability estimates are unavailable; earlier stock recordings are shown below.</p>
+      ) : stats && (
+        <StockTimeline history={history} stats={stats} days={30} />
+      )}
       <StockHistoryList history={history} />
     </div>
   );

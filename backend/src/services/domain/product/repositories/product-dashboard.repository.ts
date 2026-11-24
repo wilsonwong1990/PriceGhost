@@ -6,6 +6,7 @@ import {
   SparklinePoint
 } from '../../../../models/types';
 import { ITEM_ALERT_COLUMNS, ITEM_ALERT_JOIN, ITEM_DISPLAY_COLUMNS, withItemAlertSettings } from './item-alert-settings';
+import { CURRENT_PRICE_BASIS, HISTORY_PRICE_BASIS } from './price-basis';
 
 export const productDashboardRepository = {
   findByUserIdWithSparkline: async (userId: number): Promise<ProductWithSparkline[]> => {
@@ -25,20 +26,22 @@ export const productDashboardRepository = {
        JOIN users u ON u.id = p.user_id
        ${ITEM_ALERT_JOIN}
        LEFT JOIN LATERAL (
-         SELECT price, currency, ai_status FROM price_history
-         WHERE product_id = p.id AND price_type = 'standard'
-         ORDER BY recorded_at DESC
+         SELECT price, currency, ai_status FROM price_history history
+         WHERE history.product_id = p.id AND history.price_type = 'standard' AND ${CURRENT_PRICE_BASIS}
+         ORDER BY recorded_at DESC, history.id DESC
          LIMIT 1
        ) ph ON true
        LEFT JOIN LATERAL (
          SELECT price FROM price_history
          WHERE product_id = p.id AND price_type = 'member-price'
+           AND p.preferred_extraction_method IS DISTINCT FROM 'amazon-cart'
          ORDER BY recorded_at DESC
          LIMIT 1
        ) ph_m ON true
        LEFT JOIN LATERAL (
          SELECT price FROM price_history
          WHERE product_id = p.id AND price_type = 'original-price'
+           AND p.preferred_extraction_method IS DISTINCT FROM 'amazon-cart'
          ORDER BY recorded_at DESC
          LIMIT 1
        ) ph_o ON true
@@ -79,12 +82,12 @@ export const productDashboardRepository = {
       // price_type must be filtered here. Without it a member-only or
       // struck-through original price is plotted as though it were a change in
       // the tracked price, and the sparkline shows drops that never happened.
-      `SELECT product_id, price, recorded_at
-       FROM price_history
-       WHERE product_id = ANY($1)
-       AND price_type = 'standard'
-       AND recorded_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
-       ORDER BY product_id, recorded_at ASC`,
+      `SELECT history.product_id, history.price, history.recorded_at
+       FROM price_history history JOIN products p ON p.id = history.product_id
+       WHERE history.product_id = ANY($1)
+       AND history.price_type = 'standard' AND ${HISTORY_PRICE_BASIS}
+       AND history.recorded_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+       ORDER BY history.product_id, history.recorded_at ASC, history.id ASC`,
       [productIds]
     );
 
@@ -92,11 +95,11 @@ export const productDashboardRepository = {
     const minPriceResult = await pool.query(
       // Same reason: a member price is not a price this user ever paid, so it
       // must not become the product's all-time low.
-      `SELECT product_id, MIN(price) as min_price
-       FROM price_history
-       WHERE product_id = ANY($1)
-       AND price_type = 'standard'
-       GROUP BY product_id`,
+      `SELECT history.product_id, MIN(history.price) as min_price
+       FROM price_history history JOIN products p ON p.id = history.product_id
+       WHERE history.product_id = ANY($1)
+       AND history.price_type = 'standard' AND ${HISTORY_PRICE_BASIS}
+       GROUP BY history.product_id`,
       [productIds]
     );
 
@@ -119,7 +122,7 @@ export const productDashboardRepository = {
       const sparkline = sparklineMap.get(product.id) || [];
       let priceChange7d: number | null = null;
 
-      if (sparkline.length >= 2) {
+      if (product.current_price !== null && sparkline.length >= 2) {
         const firstPrice = parseFloat(String(sparkline[0].price));
         const lastPrice = parseFloat(String(sparkline[sparkline.length - 1].price));
         if (firstPrice > 0) {

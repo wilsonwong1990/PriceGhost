@@ -87,6 +87,53 @@ you are only tracking products, you normally do not need to configure it; ask
 your administrator to enable it for a retailer when ordinary checks cannot
 read the page correctly.
 
+### Amazon prices revealed in the cart
+
+Select **Track the new-item Amazon cart price** when adding a product, or
+**Track Amazon Cart Price** on an eligible existing listing. For Amazon.com and
+Amazon.com.au product URLs containing an ASIN, PriceStalker can try to read a
+price available in the cart. This
+experimental check requires the current browser scraper. It adds at most one
+new item to an anonymous guest cart, without signing in or proceeding to
+checkout. Amazon may retain the item in its guest cart after the check. The
+price is the guest item price, not a checkout total; account discounts,
+delivery, and taxes may differ.
+
+Chromium is the default browser. An administrator can select **Firefox** for
+the Amazon retailer under **Admin > Retailers > Browser Engine**, with the
+browser scraper enabled and the matching scraper image installed. Firefox may
+receive a different response, but it does not guarantee access. Both engines
+keep page scripts disabled during cart checks and stop at unresolved Amazon
+validation or CAPTCHA pages without retrying or signing in.
+
+The check only reports a price when it can verify the item, new condition,
+offer, quantity, and amount. If Amazon blocks the request or the page does not
+provide enough evidence, the price is unavailable rather than replaced by a
+possibly used offer. Cart-only checks do not verify stock, so the previous
+stock status is shown as unverified even when a cart price is found; API
+responses report `unknown` as the current status and retain the prior reading
+separately as `last_known_stock_status`. Automatic
+back-in-stock alerts cannot be relied on for these listings.
+An unsuccessful cart check also cannot confirm that a product page is gone;
+it is treated as a temporary failure rather than pausing monitoring.
+Some Amazon layouts omit the required condition or offer
+markers, or use a different form, so they may remain unavailable even when a
+shopper can see a cart price. Confirming a troubleshooting result repeats the
+guest check and rejects it if the price changed. Earlier page prices remain
+labeled separately in history and are not used in cart-price comparisons.
+
+The cart check requires a plain Amazon.com or Amazon.com.au HTTPS product URL
+containing an ASIN. Other Amazon marketplaces, short links and alternate
+subdomains cannot use this check; use a supported product URL instead.
+Seller, offer, condition, variant parameters, and URL fragments cannot yet be
+verified; use a plain product URL only when you want to track an Amazon-sold
+new offer. When enabling an existing listing, the stored URL may already
+have had selection parameters removed; the check tracks an Amazon-sold new
+offer, not necessarily the original seller.
+To stop cart checks, stop tracking the listing.
+Other Amazon marketplaces are not covered by this check. Live compatibility has
+not yet been verified and may vary with Amazon's page layout and location.
+
 ---
 
 ## 4. Data Extraction (The Cascade)

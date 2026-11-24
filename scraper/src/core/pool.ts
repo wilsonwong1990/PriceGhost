@@ -13,6 +13,7 @@ export interface PoolMatch {
   proxyUrl: string | null;
   userAgent: string | null;
   browserEngine: BrowserEngine;
+  amazonCartOnly?: boolean;
 }
 
 export interface PoolLimits {
@@ -24,7 +25,7 @@ export interface PoolLimits {
  * Whether a pooled session is a candidate for this request at all, before any
  * liveness probe.
  *
- * Sessions are pooled by `(proxyUrl, userAgent, browserEngine)` because those
+ * Sessions are pooled by `(proxyUrl, userAgent, browserEngine, amazonCartOnly)` because those
  * decide the identity the browser was launched with; none of them can be
  * changed per page.
  */
@@ -37,6 +38,7 @@ export function isSessionEligible(
   if (session.proxyUrl !== match.proxyUrl) return false;
   if (session.userAgent !== match.userAgent) return false;
   if (session.browserEngine !== match.browserEngine) return false;
+  if (Boolean(session.amazonCartOnly) !== Boolean(match.amazonCartOnly)) return false;
   if (session.activePages >= limits.maxPagesPerBrowser) return false;
   if (session.totalScrapes >= limits.maxScrapesPerBrowser) return false;
   // A session still launching has no browser yet; the caller awaits its

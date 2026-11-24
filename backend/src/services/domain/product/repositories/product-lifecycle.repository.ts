@@ -16,7 +16,8 @@ export const productLifecycleRepository = {
     refreshInterval: number = 43200,
     stockStatus: StockStatus = 'unknown',
     aiStatus: AIStatus = null,
-    category: string | null = null
+    category: string | null = null,
+    preferredExtractionMethod: string | null = null
   ): Promise<Product> => {
     const jitter = getSmartJitter(refreshInterval);
     const initialDelaySeconds = Math.max(60, Math.floor(refreshInterval / 2) + jitter);
@@ -39,10 +40,10 @@ export const productLifecycleRepository = {
       );
 
       const result = await client.query(
-        `INSERT INTO products (user_id, url, name, image_url, refresh_interval, stock_status, ai_status, next_check_at, category, item_id, is_primary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP + ($8 || ' seconds')::interval, $9, $10, true)
+        `INSERT INTO products (user_id, url, name, image_url, refresh_interval, stock_status, ai_status, next_check_at, category, item_id, is_primary, preferred_extraction_method)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP + ($8 || ' seconds')::interval, $9, $10, true, $11)
          RETURNING *`,
-        [userId, url, name, imageUrl, refreshInterval, stockStatus, aiStatus, initialDelaySeconds, category, item.id]
+        [userId, url, name, imageUrl, refreshInterval, stockStatus, aiStatus, initialDelaySeconds, category, item.id, preferredExtractionMethod]
       );
 
       await client.query('COMMIT');

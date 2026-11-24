@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { ProductService } from '../services/ProductService';
 import { ProfileService } from '../../settings/services/ProfileService';
@@ -31,6 +31,7 @@ export function useProductDetailState(
   const navigate = useNavigate();
 
   const [product, setProduct] = useState<ProductWithStats | null>(null);
+  const productGeneration = useRef(0);
   const [prices, setPrices] = useState<PriceHistory[]>([]);
   const [historyDays, setHistoryDays] = useState<number>(DEFAULT_HISTORY_DAYS);
   
@@ -79,15 +80,29 @@ export function useProductDetailState(
       // Reload the range the chart is currently showing, not a hardcoded month.
       fetchData();
       if (onUpdated) onUpdated(productId, data);
-    }
+    },
+    onRefreshUnverified: () => {
+      productGeneration.current += 1;
+      setProduct(current => current ? {
+        ...current,
+        current_price: null,
+        currency: null,
+        converted_price: null,
+        stock_status: 'unknown',
+        preferred_extraction_method: 'amazon-cart',
+        unavailable_reason: 'amazon_cart_price_unavailable',
+      } : current);
+    },
   });
 
   const fetchData = (days: number = historyDays) => runFetch(async () => {
+    const generation = productGeneration.current;
     const [productRes, pricesRes, profileRes] = await Promise.all([
       queryClient.fetchQuery(productDetailQuery(productId)),
       queryClient.fetchQuery(priceHistoryQuery(productId, days)),
       queryClient.fetchQuery(profileQuery()),
     ]);
+    if (generation !== productGeneration.current) return;
     setProduct(productRes);
     setPrices(Array.isArray(pricesRes?.prices) ? pricesRes.prices : []);
     setEditName(productRes.name || '');
@@ -241,6 +256,7 @@ export function useProductDetailState(
     showDeleteConfirm, setShowDeleteConfirm,
     handleRefresh: () => handleRefreshAction(productId, product?.name),
     handleRescan: () => handleRescanAction(productId),
+    handleAmazonCartScan: () => handleRescanAction(productId, true),
     handleDelete: () => handleDeleteAction(productId, product?.name),
     handleResumeMonitoring: () => handleTogglePauseAction(productId, false, product?.name),
     handlePriceSelected,

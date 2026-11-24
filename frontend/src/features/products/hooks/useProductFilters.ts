@@ -12,7 +12,7 @@ import {
   readStoredChoice,
   writeStoredChoice,
 } from '../pages/dashboard/utils';
-import { matchesStockFilter, matchesTrackingFilter } from '../pages/dashboard/filters';
+import { listingStockStatus, matchesStockFilter, matchesTrackingFilter } from '../pages/dashboard/filters';
 
 interface UseProductFiltersProps {
   products: Product[];
@@ -173,7 +173,7 @@ export function useProductFilters({ products, userTags }: UseProductFiltersProps
           comparison = (a.price_change_7d || 0) - (b.price_change_7d || 0);
           break;
         case 'status':
-          comparison = (a.stock_status || '').localeCompare(b.stock_status || '');
+          comparison = listingStockStatus(a).localeCompare(listingStockStatus(b));
           break;
         case 'last_checked':
           comparison = new Date(a.last_checked || 0).getTime() - new Date(b.last_checked || 0).getTime();

@@ -35,6 +35,7 @@ export const stockHistoryRepository = {
         if (prePeriod) {
           rows.unshift({
             ...prePeriod,
+            recorded_at: prePeriod.changed_at,
             changed_at: startOfPeriod
           });
         }

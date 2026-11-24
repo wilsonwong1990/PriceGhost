@@ -9,6 +9,8 @@ import { itemListQuery, queryKeys } from '../../../../api/queries';
 import { ProductService } from '../../services/ProductService';
 import { queryClient } from '../../../../api/queryClient';
 import { useToast } from '../../../../context/ToastContext';
+import ConfirmationModal from '../../../../components/ConfirmationModal';
+import { isAmazonCartUrl } from '../../../../utils/amazonCart';
 
 interface OverviewSectionProps {
   product: any;
@@ -25,6 +27,7 @@ const OverviewSection: React.FC<OverviewSectionProps> = ({
 }) => {
   const { showToast } = useToast();
   const [isLinking, setIsLinking] = useState(false);
+  const [confirmCartTracking, setConfirmCartTracking] = useState(false);
   const itemsQuery = useQuery(itemListQuery());
 
   // Whether this store shares a product with others decides which action is
@@ -130,12 +133,23 @@ const OverviewSection: React.FC<OverviewSectionProps> = ({
           <ProductActions 
             handleRefresh={state.handleRefresh}
             handleRescan={state.handleRescan}
+            handleAmazonCartScan={product?.preferred_extraction_method !== 'amazon-cart' && isAmazonCartUrl(product?.url) ? async () => setConfirmCartTracking(true) : undefined}
             handleDelete={async () => state.setShowDeleteConfirm(true)}
             handleResumeMonitoring={state.handleResumeMonitoring}
             isRefreshing={state.isRefreshing}
             isPaused={!!product?.checking_paused}
             onLinkToProduct={() => setIsLinking(true)}
             onSeparate={sharesProduct ? () => void handleSeparate() : undefined}
+          />
+
+          <ConfirmationModal
+            isOpen={confirmCartTracking}
+            onClose={() => setConfirmCartTracking(false)}
+            onConfirm={state.handleAmazonCartScan}
+            title="Track Amazon cart price"
+            message="This changes future checks to an Amazon-sold new-item offer. Each check adds one item to an anonymous guest cart; no order is placed, but Amazon may retain the item in that cart. The offer may change, and stock cannot be verified. To stop cart checks, stop tracking this listing."
+            confirmText="Track Cart Price"
+            isLoading={state.isRefreshing}
           />
 
           <LinkToItemModal

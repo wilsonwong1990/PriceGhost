@@ -126,6 +126,23 @@ describe('reading a listing', () => {
       expect(listingStockStatus(listing({ stock_status: status }))).toBe(status);
     });
   });
+
+  it('treats a failed Amazon cart check as unknown without hiding a confirmed unavailable page', () => {
+    const failed = listing({
+      stock_status: 'in_stock',
+      preferred_extraction_method: 'amazon-cart',
+      unavailable_reason: 'amazon_cart_price_unavailable',
+    });
+    expect(listingStockStatus(failed)).toBe('unknown');
+    expect(matchesStockFilter(failed, 'in_stock')).toBe(false);
+    expect(matchesStockFilter(failed, 'unknown')).toBe(true);
+    expect(itemStockStatus(item({ listings: [failed] }))).toBe('unknown');
+    expect(listingStockStatus({ ...failed, stock_status: 'not_available' })).toBe('unknown');
+    expect(listingStockStatus({ ...failed, unavailable_reason: null })).toBe('unknown');
+    expect(listingStockStatus({
+      ...failed, stock_status: 'not_available', unavailable_reason: 'http_404',
+    })).toBe('not_available');
+  });
 });
 
 describe('the flat "All stores" view', () => {

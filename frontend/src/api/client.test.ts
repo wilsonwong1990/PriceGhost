@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './client';
 import { ApiError } from './error';
 import { queryClient } from './queryClient';
-import { syncProductCaches } from './productCache';
-import type { Product, ProductWithStats } from '../types/api';
+import { clearUnverifiedCartPrice, syncProductCaches } from './productCache';
+import type { ItemWithListings, Product, ProductWithStats } from '../types/api';
 
 const location = { origin: 'http://localhost', pathname: '/products', search: '', hash: '', href: '' };
 const storage = new Map<string, string>();
@@ -60,5 +60,46 @@ describe('api client', () => {
 
     expect(queryClient.getQueryData<Product[]>(['products'])?.[0].name).toBe('Renamed');
     expect(queryClient.getQueryData<ProductWithStats>(['products', product.id])?.stats).toEqual(product.stats);
+  });
+
+  it('removes an unverified listing from grouped price comparisons immediately', () => {
+    const cart = { ...product, converted_price: 10, converted_currency: 'USD', preferred_extraction_method: 'amazon-cart' };
+    const other = { ...product, id: 2, current_price: 15, converted_price: 15, converted_currency: 'USD' };
+    const item: ItemWithListings = {
+      id: 1, name: 'Item', image_url: null, category: null, target_price: null,
+      price_drop_threshold: null, notify_back_in_stock: false, listings: [cart, other],
+      store_count: 2, best_price: 10, best_price_listing_ids: [1], all_tied: false,
+      best_price_currency: 'USD', price_spread: 5, comparable_count: 2, excluded_count: 0, any_in_stock: true,
+    };
+    queryClient.setQueryData(['products'], [cart, other]);
+    queryClient.setQueryData(['products', 1], cart);
+    queryClient.setQueryData(['products', 'items'], [item]);
+    clearUnverifiedCartPrice(1);
+    const result = queryClient.getQueryData<ItemWithListings[]>(['products', 'items'])?.[0];
+    expect(result).toMatchObject({
+      best_price: 15, best_price_listing_ids: [2], comparable_count: 1, excluded_count: 1, price_spread: null,
+    });
+
+    expect(result?.listings[0]).toMatchObject({ current_price: null, converted_price: null, unavailable_reason: 'amazon_cart_price_unavailable' });
+    expect(queryClient.getQueryData<Product[]>(['products'])?.[0].current_price).toBeNull();
+    expect(queryClient.getQueryData<ProductWithStats>(['products', 1])?.current_price).toBeNull();
+  });
+
+  it('switches automatic comparison currency when the primary listing loses its price', () => {
+    const cart = { ...product, is_primary: true, current_price: 10, currency: 'USD', converted_price: null };
+    const other = { ...product, id: 2, is_primary: false, current_price: 15, currency: 'EUR', converted_price: null, created_at: '2026-01-03T00:00:00Z' };
+    const older = { ...product, id: 3, is_primary: false, current_price: 5, currency: 'USD', converted_price: null, created_at: '2026-01-02T00:00:00Z' };
+    const item: ItemWithListings = {
+      id: 1, name: 'Item', image_url: null, category: null, target_price: null,
+      price_drop_threshold: null, notify_back_in_stock: false, listings: [older, cart, other],
+      store_count: 3, best_price: 5, best_price_listing_ids: [3], all_tied: false,
+      best_price_currency: 'USD', price_spread: 5, comparable_count: 2, excluded_count: 1, any_in_stock: true,
+    };
+    queryClient.setQueryData(['profile'], { currency: null });
+    queryClient.setQueryData(['products', 'items'], [item]);
+    clearUnverifiedCartPrice(1);
+    expect(queryClient.getQueryData<ItemWithListings[]>(['products', 'items'])?.[0]).toMatchObject({
+      best_price: 15, best_price_currency: 'EUR', best_price_listing_ids: [2], comparable_count: 1,
+    });
   });
 });

@@ -33,9 +33,11 @@ interface PriceSelectionModalProps {
    */
   category?: string | null;
   reviewReason?: string;
+  amazonCartRequired?: boolean;
 }
 
 const METHOD_LABELS: Record<string, string> = {
+  'amazon-cart': 'Amazon guest cart',
   'json-ld': 'Structured Data',
   'site-specific': 'Site Scraper',
   'generic-css': 'CSS Selector',
@@ -47,6 +49,7 @@ const METHOD_LABELS: Record<string, string> = {
 };
 
 const METHOD_DESCRIPTIONS: Record<string, string> = {
+  'amazon-cart': 'New-item price observed in an isolated guest cart',
   'json-ld': 'Found in page metadata (schema.org)',
   'site-specific': 'Extracted using site-specific rules',
   'generic-css': 'Found using general price selectors',
@@ -58,6 +61,7 @@ const METHOD_DESCRIPTIONS: Record<string, string> = {
 };
 
 const METHOD_TIERS: Record<string, number> = {
+  'amazon-cart': 0,
   'deal-price': 1,
   'member-price': 1,
   'pre-order-price': 1,
@@ -84,7 +88,7 @@ type PriceTypeFilter = 'all' | 'standard' | 'deal' | 'member' | 'rrp';
 
 const FILTER_METHODS: Record<PriceTypeFilter, string[]> = {
   all: [],
-  standard: ['custom-css', 'json-ld', 'standard-css', 'generic-css', 'ai', 'site-specific'],
+  standard: ['amazon-cart', 'custom-css', 'json-ld', 'standard-css', 'generic-css', 'ai', 'site-specific'],
   deal: ['deal-price'],
   member: ['member-price'],
   rrp: ['original-price', 'pre-order-price'],
@@ -100,6 +104,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
   url,
   category,
   reviewReason,
+  amazonCartRequired = false,
 }) => {
   const { user } = useAuth();
 
@@ -113,6 +118,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
   const currenciesResult = useQuery(currenciesQuery());
   const [warningMessage, setWarningMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const manualEntryVisible = showManualEntry && !amazonCartRequired;
 
   // Method tier + confidence hybrid sort and (price, tier) deduplication
   const uniqueCandidates = useMemo(() => {
@@ -175,7 +181,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
   if (!isOpen) return null;
 
   const handleConfirm = async () => {
-    if (showManualEntry) {
+    if (manualEntryVisible) {
       const parsed = parseFloat(manualPrice);
       if (isNaN(parsed) || parsed <= 0 || !manualCurrency) {
         setWarningMessage('Please enter a valid price and select its currency.');
@@ -199,8 +205,16 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
 
     if (selectedIndex === null || selectedIndex < 0 || isSubmitting) return;
     const selected = filteredCandidates[selectedIndex];
+    if (amazonCartRequired && selected.method !== 'amazon-cart') {
+      setWarningMessage('This product requires a verified Amazon cart price.');
+      return;
+    }
 
     if (!selected.currency) {
+      if (amazonCartRequired) {
+        setWarningMessage('The Amazon cart price could not be verified. Refresh and try again.');
+        return;
+      }
       setManualPrice(String(selected.price));
       setManualCurrency('');
       setManualSource(selected);
@@ -306,7 +320,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
         )}
 
         {/* Zone B: Type Filter Tab Pills */}
-        {!showManualEntry && availableTabs.length > 1 && (
+        {!manualEntryVisible && availableTabs.length > 1 && (
           <div className="price-filter-tabs">
             {availableTabs.map(tab => (
               <button
@@ -321,7 +335,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
         )}
 
         <div className="price-modal-body">
-          {showManualEntry ? (
+          {manualEntryVisible ? (
             <div className="manual-entry-container">
               <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.85rem', fontWeight: 500, color: 'var(--text)' }}>
                 Enter product price to track manually:
@@ -366,7 +380,9 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
             <div className="price-candidates-list">
               {filteredCandidates.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                  No candidates found for this price type filter.
+                  {amazonCartRequired
+                    ? 'No verified Amazon cart price is available. Refresh and try again.'
+                    : 'No candidates found for this price type filter.'}
                 </div>
               ) : (
                 filteredCandidates.map((candidate, index) => (
@@ -413,13 +429,13 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
                 ))
               )}
 
-              <button className="manual-entry-link" onClick={() => {
+              {!amazonCartRequired && <button className="manual-entry-link" onClick={() => {
                 setManualSource(null);
                 setShowManualEntry(true);
                 setWarningMessage(null);
               }}>
                 None of these look right — enter price manually
-              </button>
+              </button>}
             </div>
           )}
         </div>
@@ -431,7 +447,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
           <button
             className="btn btn-primary"
             onClick={handleConfirm}
-            disabled={(!showManualEntry && selectedIndex === null) || isSubmitting}
+            disabled={(!manualEntryVisible && selectedIndex === null) || isSubmitting}
           >
             {isSubmitting ? <LoadingSpinner size="1rem" /> : 'Confirm Selection'}
           </button>

@@ -1,13 +1,13 @@
 import { load, type CheerioAPI } from 'cheerio';
-import { logger } from '../../../utils/system/logger';
-import { detectBotChallenge, PageNotAvailableError } from '../transport';
+import { detectBotChallenge, PageNotAvailableError, RemoteCartCapabilityUnavailable } from '../transport';
 import { RetailerConfig } from '../../../models';
 import type { AcquisitionMetadata } from '../../../types/scraper';
 import type { RetailerBrowserEngine } from '../../../models/types/retailer';
 
-import { acquireRemoteHtml } from './remote';
+import { acquireRemoteAmazon, acquireRemoteHtml } from './remote';
 import { acquireStandardHtml, BotChallengeError } from './standard';
 import { handleAcquisitionFallback } from './fallback';
+import { amazonTarget, readAmazonCartMetadata, readAmazonCartObservation, type AmazonCartObservation } from './amazon';
 
 export interface AcquisitionOptions {
   url: string;
@@ -16,6 +16,8 @@ export interface AcquisitionOptions {
   productId?: number;
   extractionSteps: string[];
   requestId?: string;
+  requireAmazonCart?: boolean;
+  allowAmazonCart?: boolean;
 }
 
 export interface AcquisitionResult {
@@ -24,11 +26,46 @@ export interface AcquisitionResult {
   challengeReason: string | null;
   usedRemoteFallback: boolean;
   learnedFlags: any;
+  amazonCart?: { required: boolean; observation: AmazonCartObservation | null; metadata?: { name: string | null; imageUrl: string | null } };
+  cartStatusOnly?: boolean;
   acquisition?: AcquisitionMetadata;
 }
 
 export async function acquireHtml(options: AcquisitionOptions): Promise<AcquisitionResult> {
   const { url, domain, domainConfig, productId, extractionSteps, requestId } = options;
+  const target = options.requireAmazonCart ? amazonTarget(url) : null;
+  if (options.requireAmazonCart && (!target || !options.allowAmazonCart)) {
+    extractionSteps.push(target
+      ? 'Amazon | Cart | Verification is limited to product tracking'
+      : 'Amazon | Cart | A canonical HTTPS product URL is required');
+    return {
+      html: '', $: load(''), challengeReason: null, usedRemoteFallback: false, learnedFlags: {},
+      amazonCart: { required: true, observation: null },
+    };
+  }
+  if (target && options.requireAmazonCart) {
+    let remote;
+    try {
+      remote = await acquireRemoteAmazon({ ...options, url: target.productUrl }, 'required');
+    } catch (error) {
+      if (error instanceof RemoteCartCapabilityUnavailable) {
+        extractionSteps.push('Amazon | Cart | Browser scraper needs an update');
+      } else {
+        throw error;
+      }
+      remote = null;
+    }
+    // Guest-cart HTML may contain ephemeral session and offer fields.
+    const observation = remote?.challengeDetected === false
+      ? readAmazonCartObservation(remote.amazonCart, target)
+      : null;
+    return {
+      html: '', $: load(''), challengeReason: null, usedRemoteFallback: false, learnedFlags: {},
+      amazonCart: { required: true, observation, metadata: observation ? readAmazonCartMetadata(remote?.amazonCart) : undefined },
+      cartStatusOnly: !observation,
+      acquisition: remote ? { mode: 'browser', browserEngine: remote.browserEngine } : undefined,
+    };
+  }
   let html = '';
   let learnedFlags: any = {};
   let challengeReason: string | null = null;
@@ -69,7 +106,7 @@ export async function acquireHtml(options: AcquisitionOptions): Promise<Acquisit
         domain,
         domainConfig,
         extractionSteps,
-        requestId
+        requestId,
       });
       if (html) acquisition = { mode: 'http' };
     } catch (e) {

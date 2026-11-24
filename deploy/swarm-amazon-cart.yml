@@ -1,0 +1,17 @@
+# Optional overlay: mount the same Swarm secret in both services.
+services:
+  backend:
+    secrets:
+      - source: amazon_cart_scraper_token
+        target: amazon_cart_scraper_token
+        mode: 0444
+  scraper:
+    secrets:
+      - source: amazon_cart_scraper_token
+        target: amazon_cart_scraper_token
+        mode: 0444
+
+secrets:
+  amazon_cart_scraper_token:
+    external: true
+    name: ${AMAZON_CART_SWARM_SECRET_NAME:-pricestalker_amazon_cart_token}

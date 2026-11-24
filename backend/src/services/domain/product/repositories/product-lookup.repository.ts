@@ -1,6 +1,7 @@
 import pool from '../../../../config/database';
 import { Product } from '../../../../models/types';
 import { ITEM_ALERT_COLUMNS, ITEM_ALERT_JOIN, asProductWithItemAlerts } from './item-alert-settings';
+import { isAmazonMarketplaceUrl } from '../../../../utils/scraping/urlHelper';
 
 /**
  * The retailer a product URL belongs to, for pacing purposes only.
@@ -99,13 +100,22 @@ export const productLookupRepository = {
   },
 
   findDuplicateUrl: async (url: string, userId: number): Promise<number | null> => {
-    const fuzzyUrl = url.replace(/^https?:\/\/(www\.)?/i, '');
+    const amazon = isAmazonMarketplaceUrl(url);
+    const rawUrl = url.replace(/^https?:\/\/(www\.)?/i, '');
+    const fuzzyUrl = amazon ? rawUrl.replace(/#unverified-amazon-selection$/, '') : rawUrl;
+    const plainAmazonProduct = /^amazon\.(?:com|com\.au)\/(?:dp|gp\/product)\/[a-z0-9]{10}\/?$/i.test(fuzzyUrl);
     const result = await pool.query(
       `SELECT id FROM products 
        WHERE user_id = $1 
-       AND rtrim(REGEXP_REPLACE(url, '^https?:\/\/(www\\.)?', '', 'i'), '/') = rtrim($2, '/')
+       AND CASE WHEN $4::boolean THEN lower(rtrim(REGEXP_REPLACE(
+         REGEXP_REPLACE(url, '^https?:\/\/(www\\.)?', '', 'i'), '#unverified-amazon-selection$', ''
+       ), '/')) = lower(rtrim($2, '/'))
+       ELSE rtrim(REGEXP_REPLACE(
+         REGEXP_REPLACE(url, '^https?:\/\/(www\\.)?', '', 'i'),
+         CASE WHEN $3::boolean THEN '#unverified-amazon-selection$' ELSE '$^' END, ''
+       ), '/') = rtrim($2, '/') END
        LIMIT 1`,
-      [userId, fuzzyUrl]
+      [userId, fuzzyUrl, amazon, plainAmazonProduct]
     );
     return result.rows[0]?.id || null;
   },

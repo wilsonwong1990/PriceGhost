@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { acquireRemoteHtml } from '../../src/services/scraper/acquisition/remote';
-import { fetchRemoteHtml } from '../../src/services/scraper/transport/remote';
+import { acquireRemoteAmazon, acquireRemoteHtml } from '../../src/services/scraper/acquisition/remote';
+import { fetchRemoteHtml, fetchRemoteScrape } from '../../src/services/scraper/transport/remote';
 import { FALLBACK_USER_AGENT } from '../../src/services/scraper/transport/headers';
 import type { RetailerConfig } from '../../src/models';
 
@@ -22,6 +22,7 @@ import type { RetailerConfig } from '../../src/models';
 
 vi.mock('../../src/services/scraper/transport/remote', () => ({
   fetchRemoteHtml: vi.fn().mockResolvedValue('<html><body>ok</body></html>'),
+  fetchRemoteScrape: vi.fn().mockResolvedValue({ browserEngine: 'firefox', html: '' }),
 }));
 
 const { getDefaultUserAgent } = vi.hoisted(() => ({
@@ -151,5 +152,22 @@ describe('the browser path asks for the retailer engine', () => {
     const [, , options] = vi.mocked(fetchRemoteHtml).mock.calls[0];
     expect((options as Record<string, unknown>).browserEngine).toBe('firefox');
     expect(steps.some(s => s.includes('| Engine: Firefox'))).toBe(true);
+  });
+
+  it('passes the retailer Firefox engine to the dedicated cart request and records its receipt', async () => {
+    const steps: string[] = [];
+    await acquireRemoteAmazon({
+      url: 'https://www.amazon.com/dp/B012345678',
+      domain: 'amazon.com',
+      domainConfig: config({ use_browser_scraper: true, browser_engine: 'firefox' }),
+      productId: 7,
+      extractionSteps: steps,
+    }, 'required');
+    expect(fetchRemoteScrape).toHaveBeenCalledWith(
+      'https://www.amazon.com/dp/B012345678',
+      'http://scraper:3000',
+      expect.objectContaining({ amazonCartMode: 'required', browserEngine: 'firefox' }),
+    );
+    expect(steps).toContain('Amazon | Cart | Browser engine: firefox');
   });
 });

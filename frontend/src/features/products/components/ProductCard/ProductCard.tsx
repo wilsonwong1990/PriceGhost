@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router';
 import { Product } from '../../../../types/api';
 import { useAuth } from '../../../auth';
 import { formatPrice, formatDate, truncateUrl } from '../../../../utils/format';
+import { stockStatusForDisplay } from '../../../../utils/availability';
 import Sparkline from '../Sparkline';
 import ProductBadges from '../ProductBadges';
 import './ProductCard.css';
@@ -123,10 +124,11 @@ const ProductCard: React.FC<ProductCardProps> = ({
     .map(tag => tag.trim())
     .filter(Boolean);
 
-  const isOutOfStock = product.stock_status === 'out_of_stock';
-  const isPreOrder = product.stock_status === 'pre_order';
-  const isMemberOnly = product.stock_status === 'member_only';
-  const isNotAvailable = product.stock_status === 'not_available';
+  const stockStatus = stockStatusForDisplay(product);
+  const isOutOfStock = stockStatus === 'out_of_stock';
+  const isPreOrder = stockStatus === 'pre_order';
+  const isMemberOnly = stockStatus === 'member_only';
+  const isNotAvailable = stockStatus === 'not_available';
   const isPaused = product.checking_paused;
   const conversionRequested = Boolean(user?.currency && product.currency && user.currency !== product.currency);
   const conversionDetails = product.conversion_rate_date

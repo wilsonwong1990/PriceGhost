@@ -1,4 +1,5 @@
 import { Product, PriceReviewResponse, StockStatus } from '../../../../types/api';
+import { stockStatusForDisplay } from '../../../../utils/availability';
 
 export type SortOption = 'date_added' | 'name' | 'tag' | 'price' | 'price_change' | 'price_change_percent' | 'status' | 'last_checked' | 'website';
 export type SortOrder = 'asc' | 'desc';
@@ -177,7 +178,7 @@ export function calculateDashboardSummary(products: Product[]): DashboardSummary
     .sort((a, b) => b.count - a.count);
 
   const stockMap = products.reduce((acc, p) => {
-    const status = p.stock_status || 'unknown';
+    const status = stockStatusForDisplay(p) || 'unknown';
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);

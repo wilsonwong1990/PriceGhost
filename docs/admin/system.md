@@ -12,6 +12,32 @@ The **System** tab in the Admin Panel provides the core configurations for netwo
   enabled are fetched through it. The stored setting key keeps its original
   name so existing configurations are unaffected.
 
+  Experimental Amazon cart-price checks use the configured browser scraper
+  even when a retailer has not enabled **Use Browser Scraper**. Both the
+  backend and scraper service must be updated: an older service cannot perform
+  the isolated cart check. For a retailer configured to use a proxy, enable its
+  browser scraper too; otherwise no cart check runs and proxy credentials are
+  not sent to that service. A cart check also does not run if the configured
+  proxy is unavailable. Guest prices may differ by location.
+
+  Cart checks are opt-in. Set the same randomly generated
+  `AMAZON_CART_SCRAPER_TOKEN` (at least 32 bytes) in both services, and keep
+  the scraper endpoint private. HTTP sends this secret unencrypted: use an
+  isolated trusted network or authenticated TLS between services. Docker
+  Swarm's default overlay network is not encrypted; use an encrypted overlay
+  or authenticated TLS if traffic crosses untrusted hosts or networks. See
+  [environment variables](../developer/ENVIRONMENT_VARIABLES.md).
+
+  For Swarm, create a Docker secret from a securely generated token, then
+  deploy with both `deploy/swarm-stack.yml` and the optional
+  `deploy/swarm-amazon-cart.yml` overlay (`docker stack deploy -c
+  deploy/swarm-stack.yml -c deploy/swarm-amazon-cart.yml --with-registry-auth
+  pricestalker`). The default external secret name is
+  `pricestalker_amazon_cart_token`. The overlay mounts it in both services
+  without putting its value in the service specification. To rotate it, create
+  a new Docker secret, set `AMAZON_CART_SWARM_SECRET_NAME` to its name, and
+  redeploy with both files. Without the overlay, cart checks remain disabled.
+
 ---
 
 ## 2. Product Tracking

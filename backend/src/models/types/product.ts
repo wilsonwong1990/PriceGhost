@@ -18,6 +18,7 @@ export interface Product {
   /** Consecutive transport failures; distinct from page_gone_streak. */
   failure_streak?: number;
   last_failure_at?: Date | null;
+  preferred_extraction_method?: string | null;
   price_drop_threshold: number | null;
   target_price: number | null;
   notify_back_in_stock: boolean;

@@ -37,6 +37,9 @@ export function scrapeOutcomeLog(url: string, result: ScrapeResult): ScrapeOutco
   if (result.challengeUnresolved) {
     return { level: 'WARN', message: `Unresolved challenge wall returned: ${url} (${size})` };
   }
+  if (result.amazonCart?.required && result.amazonCart.status === 'unavailable') {
+    return { level: 'WARN', message: `Amazon cart price unavailable: ${url} (${size})` };
+  }
   if (result.challengeDetected) {
     return { level: 'INFO', message: `Success after challenge auto-resolve: ${url} (${size})` };
   }

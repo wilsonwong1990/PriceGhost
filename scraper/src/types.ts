@@ -31,6 +31,8 @@ export interface ScrapeOptions {
   /** Challenge auto-resolve attempts. Default 2, 0 disables the loop (issue #235). */
   interstitialRetries?: number;
   acceptLanguage?: string;
+  /** Use a separate, anonymous context for an Amazon product/cart observation. */
+  amazonCartMode?: 'auto' | 'required';
   /** Engine to launch for this request. Omitted means Chromium. */
   browserEngine?: BrowserEngine;
 }
@@ -53,6 +55,8 @@ export interface BrowserSession {
   userAgent: string | null;
   /** Fixed at launch, like the proxy and User-Agent, so it is part of the pool key. */
   browserEngine: BrowserEngine;
+  /** Firefox cart profiles disable content scripting and service workers at launch. */
+  amazonCartOnly?: boolean;
   lastActivity: number;
   userDataDir: string | null;
   /**
@@ -72,6 +76,8 @@ export interface BrowserSession {
 export interface ScrapeResult {
   html: string;
   screenshotBase64: string | null;
+  finalUrl?: string;
+  amazonCart?: AmazonCartResult;
   /**
    * A challenge interstitial was recognised after navigation (issue #255).
    *
@@ -94,6 +100,20 @@ export interface ScrapeResult {
    */
   browserEngine: BrowserEngine;
 }
+
+export type AmazonCartResult =
+  | { required: false }
+  | { required: true; status: 'unavailable' }
+  | {
+      required: true;
+      status: 'verified';
+      asin: string;
+      marketplace: 'amazon.com' | 'amazon.com.au';
+      condition: 'new';
+      price: number;
+      currency: 'USD' | 'AUD';
+      metadata: { name: string | null; imageUrl: string | null };
+    };
 
 export type ScraperPage = Page;
 

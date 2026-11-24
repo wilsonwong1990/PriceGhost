@@ -27,7 +27,6 @@ export async function acquireStandardHtml(options: StandardAcquisitionOptions): 
   const timeoutSetting = await settingsCache.get('scraper_timeout');
   const timeout = timeoutSetting ? parseInt(timeoutSetting, 10) : 30000;
   const headers = await getHeaders(domainConfig?.user_agent || undefined);
-
   const currentProxy = useProxy ? await settingsCache.getScraperProxy() : undefined;
   const httpsAgent = currentProxy ? new HttpsProxyAgent(currentProxy) : undefined;
   

@@ -2,6 +2,7 @@ import React from 'react';
 import { Product } from '../../../../types/api';
 import AIStatusBadge from '../../../../components/AIStatusBadge';
 import Badge from '../../../../components/Badge';
+import { isAmazonCartStockUnverified, stockStatusForDisplay } from '../../../../utils/availability';
 import './ProductBadges.css';
 import Icon from '../../../../components/Icon';
 
@@ -18,17 +19,19 @@ const ProductBadges: React.FC<ProductBadgesProps> = ({
   showInStock = false,
   showPriceTypes = true
 }) => {
-  const isOutOfStock = product.stock_status === 'out_of_stock';
-  const isPreOrder = product.stock_status === 'pre_order';
-  const isInStock = product.stock_status === 'in_stock';
-  const isMemberOnly = product.stock_status === 'member_only';
-  const isNotAvailable = product.stock_status === 'not_available';
+  const stockStatus = stockStatusForDisplay(product);
+  const isOutOfStock = stockStatus === 'out_of_stock';
+  const isPreOrder = stockStatus === 'pre_order';
+  const isInStock = stockStatus === 'in_stock';
+  const isMemberOnly = stockStatus === 'member_only';
+  const isNotAvailable = stockStatus === 'not_available';
+  const stockUnverified = isAmazonCartStockUnverified(product);
   
   const currentPrice = typeof product.current_price === 'string' 
     ? parseFloat(product.current_price) 
     : (product.current_price || 0);
   
-  const showPriceBadges = product.stock_status !== 'out_of_stock' && product.stock_status !== 'not_available';
+  const showPriceBadges = !stockUnverified && !isOutOfStock && !isNotAvailable;
   const isHistoricalLow = showPriceBadges && currentPrice > 0 && product.min_price && currentPrice <= product.min_price;
   const isSale = showPriceBadges && product.original_price && product.original_price > currentPrice;
 
@@ -60,6 +63,9 @@ const ProductBadges: React.FC<ProductBadgesProps> = ({
       )}
 
       {/* Stock Status Badges */}
+      {stockUnverified && (
+        <Badge variant="outline" size="small">Stock unverified</Badge>
+      )}
       {isPreOrder && (
         <Badge variant="warning" size="small" icon={<Icon name="clock" />}>
           Pre-Order

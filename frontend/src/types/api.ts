@@ -30,6 +30,7 @@ export interface Product {
   failure_streak?: number;
   last_failure_at?: string | null;
   id: number;
+  is_primary?: boolean;
   user_id: number;
   url: string;
   name: string | null;
@@ -99,6 +100,7 @@ export interface PriceReviewResponse {
   stockStatus: string;
   priceCandidates: PriceCandidate[];
   reviewReason: ReviewReason;
+  amazonCartRequired?: boolean;
   url: string;
   /** Comma-separated tags. Wire name only -- see the note at the top. */
   category?: string | null;
@@ -114,6 +116,7 @@ export interface PriceHistory {
   currency: string;
   ai_status: AIStatus;
   recorded_at: string;
+  details?: { price_basis?: string; asin?: string; marketplace?: string; condition?: string } | null;
   price_type?: 'standard' | 'member-price' | 'original-price' | 'deal-price' | 'pre-order' | null;
 }
 

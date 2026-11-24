@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { AuthRequest } from '../../middleware/auth';
 import { productAddService } from '../../services/domain/product';
 import { logger } from '../../utils/system/logger';
+import { productResponse } from './product-response';
 
 const router = Router();
 
@@ -16,11 +17,14 @@ router.post('/:id/scan', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const result = await productAddService.scanProduct(userId, productId);
+    const result = await productAddService.scanProduct(userId, productId, req.body?.amazonCart === true);
     res.json(result);
   } catch (error: any) {
     if (error.message === 'Product not found') {
       return res.status(404).json({ error: error.message });
+    }
+    if (error.statusCode && error.statusCode < 500) {
+      return res.status(error.statusCode).json({ error: error.message });
     }
     logger.error(`Product ${req.params.id} | Scan Failed | ${error}`, 'Products');
     res.status(500).json({ error: 'Failed to scan product' });
@@ -39,7 +43,7 @@ router.post('/:id/confirm', async (req: AuthRequest, res: Response) => {
     }
 
     const updatedProduct = await productAddService.confirmProductSelection(userId, productId, req.body);
-    res.json(updatedProduct);
+    res.json(updatedProduct ? productResponse(updatedProduct) : null);
   } catch (error: any) {
     if (error.message === 'Product not found') {
       return res.status(404).json({ error: error.message });

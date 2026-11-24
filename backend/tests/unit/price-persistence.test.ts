@@ -44,7 +44,7 @@ async function record(scraped: Record<string, unknown>, source = 'refresh') {
   );
   const service = new ProductPersistenceService();
   // recordPrices is private; the rules under test are entirely inside it.
-  await (service as never as { recordPrices: Function }).recordPrices(CLIENT, 42, scraped, source);
+  return (service as never as { recordPrices: Function }).recordPrices(CLIENT, 42, scraped, source);
 }
 
 const price = (p: number, currency: string | null = 'USD') => ({ price: p, currency });
@@ -159,6 +159,64 @@ describe('Price history persistence rules', () => {
       priceHistory.getLatest.mockResolvedValue({ price: 10, currency: 'USD' });
       await record({ price: price(10) }, 'manual-confirm');
       expect(priceHistory.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('Amazon cart price provenance', () => {
+    const observation = {
+      asin: 'B012345678',
+      marketplace: 'amazon.com',
+      condition: 'new',
+      price: 249.99,
+      currency: 'USD',
+    };
+
+    it('records a verified cart price without comparing it to an earlier ordinary offer', async () => {
+      priceHistory.getLatest.mockResolvedValue({ price: '208.00', currency: 'USD', details: null });
+      const transition = await record({
+        price: price(249.99),
+        amazonCartRequired: true,
+        amazonCartObservation: observation,
+      });
+
+      expect(priceHistory.create).toHaveBeenCalledWith(
+        42, 249.99, 'USD', undefined,
+        { price_basis: 'amazon-cart-new', asin: 'B012345678', marketplace: 'amazon.com', condition: 'new' },
+        'standard', CLIENT
+      );
+      expect(transition).toEqual({ previousPrice: null, hadPreviousPrice: true, currentPrice: price(249.99) });
+    });
+
+    it('compares subsequent verified cart observations on the same currency and basis', async () => {
+      priceHistory.getLatest.mockResolvedValue({
+        price: '260.00', currency: 'USD', details: { price_basis: 'amazon-cart-new' },
+      });
+      const transition = await record({
+        price: price(249.99),
+        amazonCartRequired: true,
+        amazonCartObservation: observation,
+      });
+      expect(transition).toEqual({ previousPrice: 260, hadPreviousPrice: true, currentPrice: price(249.99) });
+    });
+
+    it('does not record an unverified cart price or secondary prices', async () => {
+      await record({
+        price: price(208),
+        memberPrice: price(200),
+        originalPrice: price(300),
+        amazonCartRequired: true,
+      });
+      expect(priceHistory.create).not.toHaveBeenCalled();
+      expect(product.updateAnchorPrice).not.toHaveBeenCalled();
+    });
+
+    it('does not accept client-supplied cart evidence as a manual confirmation', async () => {
+      await record({
+        price: price(249.99),
+        amazonCartRequired: true,
+        amazonCartObservation: observation,
+      }, 'manual-confirm');
+      expect(priceHistory.create).not.toHaveBeenCalled();
     });
   });
 

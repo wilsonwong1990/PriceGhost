@@ -10,6 +10,7 @@ import {
 import { syncUserCategories } from './utils';
 import { groupIntoItems } from './utils/group-into-items';
 import { logger } from '../../../utils/system/logger';
+import { AMAZON_CART_METHOD } from '../../scraper/acquisition/amazon';
 
 export class ProductHistoryService {
   async getUserProducts(userId: number): Promise<ProductWithSparkline[]> {
@@ -98,6 +99,9 @@ export class ProductHistoryService {
     if (!product) throw new Error('Product not found');
 
     let history = await stockHistoryRepository.getByProductId(productId, days);
+    if (product.preferred_extraction_method === AMAZON_CART_METHOD) {
+      return { history: history.filter(entry => !entry.recorded_at), stats: null, stock_status_verified: false };
+    }
     let stats = await stockHistoryRepository.getStats(productId, days);
 
     if (history.length === 0 && product.stock_status) {

@@ -58,9 +58,9 @@ export function useDashboardState() {
     await Promise.all([productsQuery.refetch(), profile.refetch()]);
   }, [productsQuery, profile]);
 
-  const handleAddProduct = async (url: string, refreshInterval: number, tags: string) => {
+  const handleAddProduct = async (url: string, refreshInterval: number, tags: string, amazonCart: boolean) => {
     try {
-      const response = await ProductService.create({ url, refreshInterval, category: tags || null });
+      const response = await ProductService.create({ url, refreshInterval, category: tags || null, amazonCart });
 
       if (isPriceReviewResponse(response)) {
         setPriceReviewData(response);
@@ -120,13 +120,14 @@ export function useDashboardState() {
       setPriceReviewData(null);
 
     } catch (err) {
-      if (isApiError(err) && err.status === 409) {
+      if (isApiError(err) && err.status === 409 && err.body && typeof err.body === 'object' &&
+          'existingProductId' in err.body && typeof err.body.existingProductId === 'number') {
         showToast('You are already tracking this product.', 'error');
+      } else if (isApiError(err) && err.status === 409) {
+        showToast(err.message, 'error');
       } else {
         showToast('Failed to add product', 'error', err instanceof Error ? err.message : undefined);
       }
-      setShowPriceModal(false);
-      setPriceReviewData(null);
     }
   };
 

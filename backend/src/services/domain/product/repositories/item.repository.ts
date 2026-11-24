@@ -44,6 +44,21 @@ export const itemRepository = {
     return result.rows[0] || null;
   },
 
+  updateFallbackMetadata: async (
+    productId: number, userId: number, name: string | null, imageUrl: string | null, client: Executor
+  ): Promise<void> => {
+    await client.query(
+      `UPDATE items i
+       SET name = CASE WHEN i.name = LEFT(p.url, 255) AND $3::text IS NOT NULL THEN $3 ELSE i.name END,
+           image_url = COALESCE(i.image_url, $4::text),
+           updated_at = CURRENT_TIMESTAMP
+       FROM products p
+       WHERE p.id = $1 AND p.user_id = $2 AND p.item_id = i.id AND i.user_id = $2 AND p.is_primary
+         AND ((i.name = LEFT(p.url, 255) AND $3::text IS NOT NULL) OR (i.image_url IS NULL AND $4::text IS NOT NULL))`,
+      [productId, userId, name, imageUrl]
+    );
+  },
+
   /** Every listing attached to an item, primary first. */
   listingsFor: async (itemId: number, userId: number, client?: Executor) => {
     const executor = client || pool;

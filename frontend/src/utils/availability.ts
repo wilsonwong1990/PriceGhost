@@ -1,3 +1,17 @@
+import type { Product } from '../types/api';
+
+type StockDisplayProduct = Pick<Product, 'stock_status'> &
+  Partial<Pick<Product, 'preferred_extraction_method' | 'unavailable_reason'>>;
+
+export function isAmazonCartStockUnverified(product: StockDisplayProduct): boolean {
+  return product.preferred_extraction_method === 'amazon-cart' &&
+    !(product.stock_status === 'not_available' && isDefinitiveUnavailable(product.unavailable_reason));
+}
+
+export function stockStatusForDisplay(product: StockDisplayProduct): Product['stock_status'] {
+  return isAmazonCartStockUnverified(product) ? 'unknown' : product.stock_status;
+}
+
 /**
  * Human wording for the availability reason codes the backend stores on a
  * product. Mirrors backend/src/types/availability.ts.
@@ -19,6 +33,8 @@ const DESCRIPTIONS: Record<string, string> = {
   connection_failure: 'The connection to the retailer failed',
   remote_scraper_failure: 'The browser scraper could not fetch the page',
   bot_or_challenge: 'The retailer served a bot check instead of the product page',
+  amazon_cart_price_unavailable: 'The new Amazon cart price could not be verified',
+  amazon_selection_unverified: 'The Amazon URL selection could not be verified',
   unknown_scrape_failure: 'The page could not be read',
 };
 

@@ -187,6 +187,16 @@ describe('scrapeOutcomeLog (issue #255)', () => {
     expect(outcome.message).toBe(`Success: ${url} (1621160 bytes)`);
   });
 
+  it('does not log an unverified Amazon cart price as a success', () => {
+    const outcome = scrapeOutcomeLog(
+      'https://www.amazon.com/dp/B012345678',
+      result({ amazonCart: { required: true, status: 'unavailable' } })
+    );
+    expect(outcome.level).toBe('WARN');
+    expect(outcome.message).toContain('cart price unavailable');
+    expect(outcome.message).not.toContain('Success');
+  });
+
   it('distinguishes a challenge that auto-resolved from one that was never there', () => {
     const resolved = scrapeOutcomeLog(
       url,

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
 import { CDP_PROBE_TIMEOUT_MS } from '../../../scraper/src/core/health';
-import { BrowserLaunchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
+import { BrowserLaunchError, TargetSessionCartGuardMismatchError, TargetSessionEngineMismatchError } from '../../../scraper/src/core/engine';
 import {
   closeSession,
   getBrowserSession,
@@ -135,6 +135,41 @@ beforeEach(() => {
 });
 
 describe('concurrent browser reservations', () => {
+  it.each([false, true])('rejects targeting an incompatible Firefox cart profile (%s)', async amazonCartOnly => {
+    const target = await sessionWithProfile({ browserEngine: 'firefox', amazonCartOnly });
+    await expect(getBrowserSession({
+      sessionId: target.id, browserEngine: 'firefox',
+      ...(!amazonCartOnly ? { amazonCartMode: 'required' as const } : {}),
+    })).rejects.toBeInstanceOf(TargetSessionCartGuardMismatchError);
+    expect(target.tainted).toBe(false);
+    expect(target.activePages).toBe(0);
+    expect(target.totalScrapes).toBe(3);
+    expect(sessions).toContain(target);
+    await closeSession(target);
+  });
+
+  it('separates script-disabled Firefox cart launches from ordinary Firefox pooling', async () => {
+    vi.stubEnv('FIREFOX_EXECUTABLE_PATH', process.execPath);
+    const launch = vi.spyOn(puppeteer, 'launch').mockImplementation(async () => {
+      const browser = fakeBrowser().browser;
+      vi.spyOn(browser, 'process').mockReturnValue(null);
+      return browser;
+    });
+    const cart = await getBrowserSession({ browserEngine: 'firefox', amazonCartMode: 'required' });
+    const ordinary = await getBrowserSession({ browserEngine: 'firefox' });
+    expect(cart).not.toBe(ordinary);
+    expect(cart?.amazonCartOnly).toBe(true);
+    expect(ordinary?.amazonCartOnly).toBe(false);
+    expect(launch.mock.calls[0][0]?.extraPrefsFirefox).toMatchObject({
+      'javascript.enabled': false, 'dom.serviceWorkers.enabled': false,
+    });
+    expect(launch.mock.calls[1][0]?.extraPrefsFirefox).not.toHaveProperty('javascript.enabled');
+    expect(await getBrowserSession({ browserEngine: 'firefox', amazonCartMode: 'auto' })).toBe(cart);
+    expect(await getBrowserSession({ browserEngine: 'firefox' })).toBe(ordinary);
+    expect(launch).toHaveBeenCalledTimes(2);
+    for (const session of [...sessions]) await closeSession(session);
+  });
+
   it('rejects a targeted session with a different engine without retiring it', async () => {
     const target = await sessionWithProfile({ browserEngine: 'chromium' });
     await expect(getBrowserSession({ sessionId: target.id, browserEngine: 'firefox' })).rejects.toBeInstanceOf(TargetSessionEngineMismatchError);

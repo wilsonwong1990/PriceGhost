@@ -3,6 +3,7 @@ import { AuthRequest } from '../../middleware/auth';
 import { productAddService, productHistoryService } from '../../services/domain/product';
 import { itemRepository } from '../../models';
 import { asyncHandler, parseIdParam, callerIsAdmin } from '../../utils/system/route-helpers';
+import { productResponse } from './product-response';
 
 const router = Router();
 
@@ -10,7 +11,7 @@ const router = Router();
 router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   const userId = req.userId!;
   const products = await productHistoryService.getUserProducts(userId);
-  res.json(products);
+  res.json(products.map(productResponse));
 }, 'Product', 'Products', 'Failed to fetch products'));
 
 /**
@@ -22,7 +23,7 @@ router.get('/', asyncHandler(async (req: AuthRequest, res: Response) => {
  */
 router.get('/items', asyncHandler(async (req: AuthRequest, res: Response) => {
   const items = await productHistoryService.getUserItems(req.userId!);
-  res.json(items);
+  res.json(items.map(item => ({ ...item, listings: item.listings.map(productResponse) })));
 }, 'Product', 'Products', 'Failed to fetch items'));
 
 /**
@@ -72,7 +73,7 @@ router.post('/', asyncHandler(async (req: AuthRequest, res: Response) => {
   if (result.needsReview) {
     res.json(result);
   } else {
-    res.status(201).json(result);
+    res.status(201).json(productResponse(result));
   }
 }, 'Product | Add', 'Products', 'Failed to add product'));
 
@@ -92,7 +93,7 @@ router.get('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  res.json(product);
+  res.json(productResponse(product));
 }, 'Product | Fetch', 'Products', 'Failed to fetch product'));
 
 router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
@@ -110,7 +111,7 @@ router.put('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  res.json(updated);
+  res.json(productResponse(updated));
 }, 'Product | Update', 'Products', 'Failed to update product'));
 
 router.delete('/:id', asyncHandler(async (req: AuthRequest, res: Response) => {

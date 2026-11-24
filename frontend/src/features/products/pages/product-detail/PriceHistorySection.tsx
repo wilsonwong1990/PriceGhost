@@ -22,7 +22,8 @@ const PriceHistorySection: React.FC<PriceHistorySectionProps> = ({
     <div className="price-history-section">
       <PriceChart
         prices={prices}
-        currency={product.currency || 'USD'}
+        currency={product.currency || prices[prices.length - 1]?.currency || 'USD'}
+        cartPriceBasis={product.preferred_extraction_method === 'amazon-cart'}
         targetPrice={product.target_price}
         onRangeChange={handleRangeChange}
         rangeDays={rangeDays}
@@ -31,6 +32,7 @@ const PriceHistorySection: React.FC<PriceHistorySectionProps> = ({
       <PriceHistoryList 
         history={prices} 
         currency={product.currency || 'USD'} 
+        cartPriceBasis={product.preferred_extraction_method === 'amazon-cart'}
         locale={user?.locale}
       />
     </div>

@@ -1,4 +1,5 @@
-import express from 'express';
+import express, { type Request, type Response } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { log } from '../utils/logger.js';
 import { ScraperService } from '../services/ScraperService.js';
 import { SessionService } from '../services/SessionService.js';
@@ -8,12 +9,13 @@ import { scrapeOutcomeLog } from '../utils/outcome.js';
 import type { BrowserSession, ScrapeOptions } from '../types.js';
 import { errorMessage } from '../types.js';
 import { scrubUrlCredentials } from '../utils/scrub.js';
-import { BrowserLaunchError, TargetSessionEngineMismatchError, resolveBrowserEngine } from '../core/engine.js';
+import { amazonTarget } from '../services/AmazonCart.js';
+import { BrowserLaunchError, TargetSessionCartGuardMismatchError, TargetSessionEngineMismatchError, resolveBrowserEngine } from '../core/engine.js';
 
 const router = express.Router();
 
 // Scrape endpoint
-router.post('/scrape', async (req, res) => {
+async function handleScrape(req: Request, res: Response) {
   const { url, options = {} } = req.body as { url?: string; options?: ScrapeOptions };
   
   // Diagnostic log for identity debugging. The proxy URL carries inline
@@ -55,7 +57,9 @@ router.post('/scrape', async (req, res) => {
     session = await SessionService.acquireSession({ ...options, browserEngine }, abortController.signal);
   } catch (error) {
     if (abortController.signal.aborted) return;
-    if (error instanceof TargetSessionEngineMismatchError) return res.status(409).json({ error: error.message });
+    if (error instanceof TargetSessionEngineMismatchError || error instanceof TargetSessionCartGuardMismatchError) {
+      return res.status(409).json({ error: error.message });
+    }
     if (!(error instanceof BrowserLaunchError)) throw error;
     log(`${error.message} for ${url}`, 'ERROR', context);
     return res.status(500).json({ error: error.message });
@@ -98,13 +102,13 @@ router.post('/scrape', async (req, res) => {
     // A CDP protocol failure means the DevTools connection, not the page, is
     // the problem, and the browser behind it is not safe to reuse (#254).
     if (isProtocolError(error)) {
-      markSessionTainted(session, `CDP protocol error: ${errorMessage(error)}`);
+      markSessionTainted(session, `CDP protocol error: ${scrubUrlCredentials(errorMessage(error))}`);
     }
 
     if (abortController.signal.aborted) {
       log(`Scrape aborted: ${url}`, 'DEBUG', context);
     } else {
-      const message = errorMessage(error);
+      const message = scrubUrlCredentials(errorMessage(error));
       log(`Scrape Error: ${url} | ${message}`, 'ERROR', context);
       res.status(500).json({ error: message });
     }
@@ -132,6 +136,34 @@ router.post('/scrape', async (req, res) => {
       }
     }
   }
+}
+
+router.post('/scrape', async (req, res) => {
+  if (req.body?.options?.amazonCartMode) {
+    return res.status(400).json({ error: 'Amazon cart checks require the dedicated endpoint' });
+  }
+  return handleScrape(req, res);
+});
+
+router.post('/amazon/cart-price', async (req, res) => {
+  const configuredToken = process.env.AMAZON_CART_SCRAPER_TOKEN;
+  if (!configuredToken || Buffer.byteLength(configuredToken) < 32) {
+    return res.status(503).json({ error: 'Amazon cart checks are not configured' });
+  }
+  const authorization = req.get('authorization');
+  const supplied = authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+  const expectedBytes = Buffer.from(configuredToken);
+  const suppliedBytes = Buffer.from(supplied);
+  if (suppliedBytes.length !== expectedBytes.length || !timingSafeEqual(suppliedBytes, expectedBytes)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const target = typeof req.body?.url === 'string' ? amazonTarget(req.body.url) : null;
+  const mode = req.body?.options?.amazonCartMode;
+  if (!target || (mode !== 'auto' && mode !== 'required')) {
+    return res.status(400).json({ error: 'A supported Amazon product URL and cart mode are required' });
+  }
+  req.body.url = target.productUrl;
+  return handleScrape(req, res);
 });
 
 // Health check

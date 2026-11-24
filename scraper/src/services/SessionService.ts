@@ -34,7 +34,7 @@ export class SessionService {
         // Surfaced on /health so an operator can see a session being retired
         // rather than inferring it from the log (issue #254).
         tainted: s.tainted,
-        taintReason: s.taintReason,
+        taintReason: s.taintReason ? scrubUrlCredentials(s.taintReason) : null,
         uptime: Math.floor((Date.now() - parseInt(s.id.split('_')[1])) / 1000)
       }))
     };

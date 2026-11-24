@@ -12,7 +12,7 @@ interface ProductFormProps {
    * `category` field -- the UI-to-wire mapping lives in the dashboard state
    * hook and ProductService, not here. See the note in types/api.ts (#147).
    */
-  onSubmit: (url: string, refreshInterval: number, tags: string) => Promise<void | boolean>;
+  onSubmit: (url: string, refreshInterval: number, tags: string, amazonCart: boolean) => Promise<void | boolean>;
   availableTags?: string[];
 }
 
@@ -24,6 +24,7 @@ import { snapToOfferedInterval } from '../../../../utils/refreshInterval';
 
 const ProductForm: React.FC<ProductFormProps> = ({ onSubmit, availableTags }) => {
   const [url, setUrl] = useState('');
+  const [amazonCart, setAmazonCart] = useState(false);
   const [mode, setMode] = useState<'url' | 'search'>('url');
   const discoveryStatus = useQuery(discoveryStatusQuery());
   const isSearchEnabled = discoveryStatus.data?.enabled ?? false;
@@ -106,13 +107,13 @@ const ProductForm: React.FC<ProductFormProps> = ({ onSubmit, availableTags }) =>
     if (isLoading) return;
     setTrackingUrl(resultUrl);
     try {
-      await submitUrl(resultUrl);
+      await submitUrl(resultUrl, false);
     } finally {
       setTrackingUrl(null);
     }
   };
 
-  const submitUrl = async (rawUrl: string) => {
+  const submitUrl = async (rawUrl: string, useAmazonCart = amazonCart) => {
     if (isLoading) return;
     setError('');
 
@@ -133,13 +134,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ onSubmit, availableTags }) =>
       
       const tagString = finalTags.join(', ');
       
-      const result = await onSubmit(processedUrl, effectiveRefreshInterval, tagString);
+      const result = await onSubmit(processedUrl, effectiveRefreshInterval, tagString, useAmazonCart);
       
       if (result !== false) {
         setUrl('');
         setTags([]);
         setTagInput('');
         setRefreshInterval(null);
+        setAmazonCart(false);
       }
     } catch (err) {
       if (err instanceof Error) {
@@ -220,6 +222,14 @@ const ProductForm: React.FC<ProductFormProps> = ({ onSubmit, availableTags }) =>
                 required
                 style={{ width: '100%' }}
               />
+            </div>
+
+            <div className="form-group mb-4">
+              <label>
+                <input type="checkbox" checked={amazonCart} onChange={(e) => setAmazonCart(e.target.checked)} />
+                {' '}Track the new-item Amazon cart price
+              </label>
+              <p className="text-muted">For plain Amazon.com or Amazon.com.au product URLs. Each check adds one new item to an anonymous guest cart; no order is placed. Amazon may retain the item in that cart. The default offer may change.</p>
             </div>
 
             <div className="product-form-row">

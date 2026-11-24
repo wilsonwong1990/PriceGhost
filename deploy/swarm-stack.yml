@@ -89,8 +89,13 @@ services:
       - /bin/sh
       - -c
       - |
+        set -e
         export DATABASE_URL="postgresql://postgres:$$(cat /run/secrets/pg_pricestalker_pass)@postgres:5432/priceghost"
         export JWT_SECRET="$$(cat /run/secrets/pg_pricestalker_jwt)"
+        if [ -f /run/secrets/amazon_cart_scraper_token ]; then
+          AMAZON_CART_SCRAPER_TOKEN="$$(cat /run/secrets/amazon_cart_scraper_token)"
+          export AMAZON_CART_SCRAPER_TOKEN
+        fi
         exec docker-entrypoint.sh node dist/index.js
     networks:
       - pricestalker-internal
@@ -143,6 +148,16 @@ services:
       # Kept under /tmp so it lands on the capped tmpfs mounted below rather
       # than the node's overlay storage (issue #52).
       PROFILE_BASE_DIR: ${SCRAPER_PROFILE_BASE_DIR:-/tmp/scraper-profiles}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ -f /run/secrets/amazon_cart_scraper_token ]; then
+          AMAZON_CART_SCRAPER_TOKEN="$$(cat /run/secrets/amazon_cart_scraper_token)"
+          export AMAZON_CART_SCRAPER_TOKEN
+        fi
+        exec node dist/scraper.js
     # Chromium re-parents its orphaned helper processes onto PID 1; without a
     # reaper they accumulate as <defunct> until the kernel PID table is
     # exhausted (issue #206). `docker stack deploy` does map this onto the
