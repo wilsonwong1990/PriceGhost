@@ -6,6 +6,7 @@ import { asyncHandler } from '../../../../utils/system/route-helpers';
 import { systemSettingsRepository } from '../../../../models';
 import { AISettings } from '../../../../models/types';
 import { assertValidCopilotTokenInput, isMaskedSecret } from '../../../../utils/system/masking';
+import { assertUrlIsSafe } from '../../../../utils/system/url-safety';
 
 const router = Router();
 
@@ -55,6 +56,8 @@ router.post('/test', asyncHandler(async (req: AuthRequest, res: Response) => {
     res.status(400).json({ error: 'URL is required' });
     return;
   }
+
+  await assertUrlIsSafe(url, { policy: 'block-all-private' });
 
   const settings = await systemService.getAISettings();
   if (!settings.ai_enabled) {

@@ -42,7 +42,7 @@ Adjusts how the remote Puppeteer browser behaves when resolving anti-bot protect
 
 ## 5. Security & Access
 * **Allow User Registration (`registration_enabled`)**: Toggles whether users can register a new account on the login page.
-* **Allow Password Reset via Email (`password_reset_enabled`)**: Toggles whether users can request password-reset links via SMTP. Requires fallback SMTP to be configured.
+* **Allow Password Reset via Email (`password_reset_enabled`)**: Toggles whether users can request password-reset links via SMTP. Requires fallback SMTP and a valid `PUBLIC_URL` to be configured.
 * **Enable Admin Debug Page (`debug_page_enabled`)**: Toggle to enable or disable the diagnostic console page (`/debug`).
 * **Disable Global Scheduler (`scheduler_disabled`)**: Circuit-breaker toggle. When enabled, pauses all automated background price checks instance-wide while still permitting manual scrapes.
 * **Disable Auto Retailer Updates (`retailer_updates_disabled`)**: Prevents background heuristics and AI auto-mapping from persisting automatic modifications to retailer rules.

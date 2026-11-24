@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requested selected listing, rather than a different size or recommendation.
   When the option cannot be verified, existing tracking data is retained and
   the user is prompted to use the selected option's URL.
+- Password-reset emails use the configured `PUBLIC_URL` rather than the
+  request host. Password reset is unavailable until a valid `PUBLIC_URL` and
+  fallback SMTP are configured.
+- Client-supplied selectors cannot introduce new XPath expressions into shared
+  retailer configurations; the AI extraction test applies the existing
+  private-network URL policy, which allows internal targets only when
+  `ALLOW_INTERNAL_SCRAPING` is enabled.
+- Remote integration tests pass SSH arguments without a local shell and quote
+  remote paths. Patched the vulnerable `proxy-addr` and `seroval` dependencies.
 - Corrected Firefox pool reservations, request language headers, debug engine
   saves, and proxy credential redaction for SOCKS URLs.
 

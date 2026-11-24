@@ -59,7 +59,7 @@ These parameters enable and coordinate Single Sign-On integrations. Detailed set
 | Variable | Description | Default |
 |:---|:---|:---|
 | `ENABLE_SSO` | Set to `true` to activate the OpenID Connect (OIDC) authentication endpoints and reveal SSO login routes in the UI. | `false` |
-| `PUBLIC_URL` | The external public base URL of this PriceStalker instance. Required when `ENABLE_SSO` is active to formulate callback redirects. | `https://pricestalker.example.com` |
+| `PUBLIC_URL` | The external base URL of this PriceStalker instance. Required for password reset and when `ENABLE_SSO` is active. Password reset requires an HTTP(S) origin without credentials, a path, a query, or a fragment. | `https://pricestalker.example.com` |
 | `OIDC_REDIRECT_URI_OVERRIDE` | Override callback URL for custom reverse proxy routing configurations if different from `${PUBLIC_URL}/api/auth/oidc/callback`. | *(Empty)* |
 
 ---
