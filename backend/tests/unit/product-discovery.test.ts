@@ -60,4 +60,14 @@ describe('ProductDiscoveryService Scrape Failure Reporting', () => {
     await expect(service.initiateProductDiscovery(1, 'https://example.com/product', null))
       .rejects.toThrow('The retailer blocked the request (Imperva/Incapsula Challenge). Enable the Browser Scraper for this retailer under Admin -> Retailers, or configure a proxy, then try again.');
   });
+
+  it('returns a manual review when the selected Amazon option is ambiguous', async () => {
+    vi.mocked(scrapeProductWithVoting).mockResolvedValueOnce({
+      name: null, price: null, imageUrl: null, url: 'https://www.amazon.com/dp/B012345678',
+      stockStatus: 'unknown', aiStatus: null, priceCandidates: [], needsReview: false,
+      failureReason: 'variant_selection_required',
+    });
+    await expect(service.initiateProductDiscovery(1, 'https://www.amazon.com/dp/B012345678', null))
+      .resolves.toMatchObject({ needsReview: true, reviewReason: 'variant_selection_required', priceCandidates: [] });
+  });
 });

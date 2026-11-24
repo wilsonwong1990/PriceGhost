@@ -6,6 +6,9 @@ import { extractAllPriceCandidates } from '../prices';
 import { extractMetadata } from '../metadata';
 import { denoiseDomForExtraction } from '../extractors/dom-denoiser';
 import { settingsCache } from '../../../utils/cache';
+import { load } from 'cheerio';
+import { extractCustomCandidates } from '../extractors/custom-prices';
+import { extractProductStock } from '../metadata/stock';
 
 export interface ExtractionOptions {
   url: string;
@@ -16,6 +19,7 @@ export interface ExtractionOptions {
   currencyHint: string | null;
   localeHint: string;
   extractionSteps: string[];
+  amazonStockHtml?: string;
 }
 
 export async function runExtractionPhase(
@@ -57,10 +61,19 @@ export async function runExtractionPhase(
 
   // 1. Metadata (Name, Image, Stock) first
   await extractMetadata($, domainConfig || undefined, extractionSteps, result, url);
+  if (options.amazonStockHtml !== undefined) {
+    if (options.amazonStockHtml) {
+      const stockConfig = domainConfig ? { ...domainConfig, pre_order_price_selectors: [] } : undefined;
+      await extractProductStock(load(options.amazonStockHtml), stockConfig, extractionSteps, result);
+    } else {
+      result.stockStatus = 'unknown';
+      result.stockCandidates = [];
+    }
+  }
 
   // 2. Extract Price Candidates
   extractionSteps.push(`HTML | Metadata | Length: ${html.length} chars`);
-  const allCandidates = await extractAllPriceCandidates(
+  let allCandidates = await extractAllPriceCandidates(
     $, 
     html, 
     domainConfig || undefined, 
@@ -68,6 +81,23 @@ export async function runExtractionPhase(
     localeHint, 
     extractionSteps
   );
+  if (options.amazonStockHtml !== undefined) {
+    const selected = extractCustomCandidates(
+      $,
+      ['#corePrice_feature_div .apex-pricetopay-value .a-offscreen'],
+      html,
+      currencyHint || undefined,
+      localeHint
+    );
+    allCandidates = selected.length === 0 ? [] : [
+      ...selected,
+      ...allCandidates.filter(c => c.price === selected[0].price && c.currency === selected[0].currency)
+    ];
+    result.priceCandidates = selected.length === 0 ? [] : result.priceCandidates.filter(
+      c => c.price === selected[0].price && c.currency === selected[0].currency
+    );
+    extractionSteps.push(`Extract | Amazon | ${selected.length ? 'Selected listing price verified' : 'No verified listing price'}`);
+  }
   // Merged, not replaced (issue #166).
   //
   // Phase 4 runs this a second time after AI auto-mapping generates a retailer

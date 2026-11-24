@@ -16,6 +16,8 @@ import { runConsensusPhase } from './consensus';
 import { runVerificationPhase } from './verification';
 import { handleRetailerMaintenance, handleAutoMapping, handleRestoreStatus } from './maintenance';
 import { classifyTransportError } from '../../../types/availability';
+import { isAmazonUrl, scopeAmazonPage } from '../extractors/amazon-scope';
+import { load } from 'cheerio';
 
 /**
  * High-level scraper entry point.
@@ -89,6 +91,30 @@ export async function scrapeProductWithVoting(
     result.acquisition = acqResult.acquisition;
     $ = acqResult.$;
     let challenge = acqResult.challengeReason;
+    let amazonStockHtml: string | undefined;
+
+    if (challenge && isAmazonUrl(url)) {
+      // Challenge pages cannot establish ownership of any visible prices.
+      html = '';
+      $ = load(html);
+      amazonStockHtml = '';
+    } else if (!challenge) {
+      const amazon = scopeAmazonPage(url, $);
+      if (amazon.kind === 'ambiguous') {
+        result.failureReason = 'variant_selection_required';
+        result.failureDetail = amazon.detail;
+        extractionSteps.push(`Extract | Amazon | ${amazon.detail}`);
+        result.extractionSteps = extractionSteps;
+        logger.warn(`Extraction | Amazon | ${amazon.detail}`, 'Extraction', { product_id: productId, requestId });
+        return result;
+      }
+      if (amazon.kind === 'scoped') {
+        html = amazon.html;
+        amazonStockHtml = amazon.stockHtml;
+        $ = load(html);
+        extractionSteps.push('Extract | Amazon | Restricted extraction to selected listing');
+      }
+    }
 
     // Surface acquisition-learned flags on the result so the retailer config
     // is updated on save even when AI auto-mapping is disabled (issue #45).
@@ -105,7 +131,8 @@ export async function scrapeProductWithVoting(
       domainConfig,
       currencyHint,
       localeHint,
-      extractionSteps
+      extractionSteps,
+      amazonStockHtml
     }, result);
     
     currencyHint = extResults.currencyHint;
@@ -176,7 +203,8 @@ export async function scrapeProductWithVoting(
           domainConfig,
           currencyHint,
           localeHint,
-          extractionSteps
+          extractionSteps,
+          amazonStockHtml
         }, result);
         currencyHint = reExtract.currencyHint;
         localeHint = reExtract.localeHint;
@@ -199,8 +227,6 @@ export async function scrapeProductWithVoting(
       extractionSteps
     }, result);
 
-    await handleRestoreStatus(result, domainConfig, !!overrideConfig, challenge, extractionSteps);
-
     // --- Phase 6: AI Verification ---
     await runVerificationPhase({
       url,
@@ -210,6 +236,27 @@ export async function scrapeProductWithVoting(
       finalSkipAiVerification: session.finalSkipAiVerification,
       extractionSteps
     }, result);
+
+    if (amazonStockHtml !== undefined && result.price &&
+        !result.priceCandidates.some(c => c.price === result.price?.price && c.currency === result.price?.currency)) {
+      extractionSteps.push('Extract | Amazon | Discarded a price not found on the selected listing');
+      result.price = null;
+      result.selectedMethod = undefined;
+      result.aiStatus = null;
+      result.needsReview = true;
+    }
+
+    if (amazonStockHtml !== undefined && !challenge && !result.priceCandidates.length &&
+        result.stockStatus !== 'out_of_stock' && result.stockStatus !== 'pre_order' &&
+        result.stockStatus !== 'not_available') {
+      result.failureReason = 'variant_selection_required';
+      result.failureDetail = 'No price or definitive availability could be verified for the requested Amazon listing.';
+      extractionSteps.push(`Extract | Amazon | ${result.failureDetail}`);
+      result.extractionSteps = extractionSteps;
+      return result;
+    }
+
+    await handleRestoreStatus(result, domainConfig, !!overrideConfig, challenge, extractionSteps);
 
     result.html = html;
     result.extractionSteps = extractionSteps;

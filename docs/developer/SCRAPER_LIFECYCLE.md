@@ -74,6 +74,16 @@ Generic acquisition errors are returned to the orchestration error path. They do
 
 **Files:** `backend/src/services/scraper/orchestration/extraction.ts`, `backend/src/services/scraper/extractors/`
 
+Amazon product URLs receive an additional identity check before extraction:
+the requested ASIN must match the displayed ASIN and each supported inline
+option selection. Extraction, auto-mapping and AI receive a reduced document
+containing only the verified offer's price, availability, title and image;
+candidate prices must match that offer. Legacy variation controls and layouts
+without verifiable offer data fail closed. An ambiguous refresh reschedules
+and marks the listing for review without changing its prior price, stock or
+failure state, or sending alerts. A manual price is an explicit override and
+does not verify future refreshes.
+
 Runs in this order:
 
 1. **DOM Denoiser** — `denoiseDomForExtraction()` strips `<script>`, `<style>`, `<noscript>`, `<footer>`, `<nav>`, `<header>`, `<aside>` etc. from the Cheerio DOM. Preserves nodes matching any retailer price/stock/name selector to avoid destroying evidence.

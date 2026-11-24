@@ -2,6 +2,13 @@
 
 PriceStalker uses a unified selector engine that allows administrators to define custom paths to extract prices, product titles, and stock statuses. You can mix CSS, XPath, and Regex patterns within your retailer configurations.
 
+For Amazon product URLs, selectors and AI auto-mapping operate on a reduced
+document for the verified selected ASIN, not the complete page. Page-wide
+JSON-LD, scripts, recommendations and other variant prices are not available
+to selectors. Unsupported option layouts or offer sections cannot be
+overridden with a broader selector; use the selected option's product URL
+and check the scrape result instead.
+
 ---
 
 ## 1. Retailer Configuration Structure
