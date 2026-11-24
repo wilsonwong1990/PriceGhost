@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The backend image now includes system CA certificates. Without them the
+  GitHub Copilot runtime could not verify GitHub's TLS certificate and
+  rejected every valid token as "Not authenticated", shown in Admin as a
+  model or tier availability error.
 - Amazon tracking now checks that prices and availability belong to the
   requested selected listing, rather than a different size or recommendation.
   When the option cannot be verified, existing tracking data is retained and

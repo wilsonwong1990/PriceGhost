@@ -42,6 +42,14 @@ WORKDIR /app
 
 ARG TARGETPLATFORM
 
+# The Copilot SDK runtime is native code that verifies TLS against the OS trust
+# store through OpenSSL, unlike Node, which bundles its own roots. Without
+# ca-certificates (which also pulls in OpenSSL) it cannot reach GitHub and
+# reports every token as "Not authenticated".
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY backend/package.json ./backend/
 
