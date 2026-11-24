@@ -30,22 +30,43 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function getPublicUrl(): string | null {
+  const value = process.env.PUBLIC_URL;
+  if (!value) return null;
+
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
+        url.pathname !== '/' || url.href.includes('?') || url.href.includes('#')) {
+      return null;
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
 export class PasswordResetService {
   /**
-   * Reset is available when the admin toggle allows it AND the system mailer
-   * is configured — without SMTP the email could never be delivered.
+   * Reset requires the admin toggle, a system mailer and a trusted public URL.
    */
   async isEnabled(): Promise<boolean> {
     const setting = await systemService.getSetting('password_reset_enabled');
-    return setting !== 'false' && isSystemMailerConfigured();
+    if (setting === 'false' || !isSystemMailerConfigured()) return false;
+    if (!getPublicUrl()) {
+      logger.warn('Auth | Password Reset | A valid PUBLIC_URL is required', 'Auth');
+      return false;
+    }
+    return true;
   }
 
   /**
    * Issues a reset token and emails the link. Always resolves without
    * revealing whether the email belongs to an account (no user enumeration).
    */
-  async requestReset(email: string, baseUrl: string, clientIp: string): Promise<void> {
-    if (!(await this.isEnabled())) {
+  async requestReset(email: string, clientIp: string): Promise<void> {
+    const baseUrl = getPublicUrl();
+    if (!baseUrl || !(await this.isEnabled())) {
       const err = new Error('Password reset is not available on this server');
       (err as any).statusCode = 404;
       throw err;

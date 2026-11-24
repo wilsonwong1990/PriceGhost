@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { PoolClient } from 'pg';
 import { runAutoRetailerConfig } from '../../src/services/domain/product/utils/auto-config';
 
 // Hoist mock objects to resolve ReferenceError: Cannot access before initialization
@@ -108,7 +109,7 @@ describe('Auto-Config Selector Staleness & Eviction Unit Tests', () => {
         aiStatus: null,
       },
       source: 'refresh' as const,
-      client: mockClient as any,
+      client: mockClient as unknown as PoolClient,
     };
 
     await runAutoRetailerConfig(params);
@@ -128,6 +129,37 @@ describe('Auto-Config Selector Staleness & Eviction Unit Tests', () => {
 
     const s3Stats = upsertedData.selector_metadata.selectors['.s3'];
     expect(s3Stats.consecutive_failures).toBe(5);
+  });
+
+  it('does not promote selectors supplied by a client unless already configured', async () => {
+    await runAutoRetailerConfig({
+      url: 'https://example.com/product',
+      productId: 123,
+      manualSelector: 'xpath://div[@id="attacker"]',
+      scrapedData: {
+        price: { price: 99.99, currency: 'USD' },
+        priceCandidates: [{
+          price: 99.99,
+          currency: 'USD',
+          method: 'custom-css',
+          selector: 'xpath://div[@id="attacker"]',
+          confidence: 0.90,
+        }],
+        selectedMethod: 'custom-css',
+        needsReview: false,
+        name: 'Test Product',
+        stockStatus: 'in_stock',
+        imageUrl: '',
+        url: 'https://example.com/product',
+        aiStatus: null,
+      },
+      source: 'manual-confirm',
+      client: mockClient as unknown as PoolClient,
+    });
+
+    const upsertedData = mockUpsert.mock.calls[0][0];
+    expect(upsertedData.price_selectors).not.toContain('xpath://div[@id="attacker"]');
+    expect(upsertedData.deal_price_selectors).not.toContain('xpath://div[@id="attacker"]');
   });
 
   it('should implement score-based eviction to cap custom arrays at 10 and evict the lowest scoring selectors', async () => {

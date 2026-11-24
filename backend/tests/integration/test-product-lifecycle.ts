@@ -1,5 +1,5 @@
-import { execSync } from 'child_process';
 import axios from 'axios';
+import { quoteRemoteArgument, requireProductId, runSshCommand } from './ssh-command';
 
 /**
  * End-to-End Product Lifecycle Integration Test
@@ -37,14 +37,9 @@ const headers = {
   'Connection': 'close'
 };
 
-function runRemoteCommand(command: string): string {
-  try {
-    const formattedCommand = command.replace(/"/g, '\\"');
-    const result = execSync(`ssh ${SERVER} "${formattedCommand}"`, { encoding: 'utf-8' });
-    return result.trim();
-  } catch (error: any) {
-    throw new Error(`SSH Command failed: ${error.message}\nOutput: ${error.stdout || error.stderr}`);
-  }
+function runRemoteCommand(command: string, input?: string): string {
+  if (!SERVER) throw new Error('TEST_SSH_TARGET is required');
+  return runSshCommand(SERVER, command, input);
 }
 
 async function run() {
@@ -72,7 +67,7 @@ async function run() {
 </body>
 </html>`;
 
-  runRemoteCommand(`cat <<'EOF' > ${mockFilePath}\n${initialHtml}\nEOF`);
+  runRemoteCommand(`cat > ${quoteRemoteArgument(mockFilePath)}`, initialHtml);
   console.log('Mock page created.');
 
   // ==========================================
@@ -104,10 +99,7 @@ async function run() {
   };
 
   const confirmResponse = await axios.post(`${BACKEND_URL}/api/products`, confirmPayload, { headers });
-  const productId = confirmResponse.data.id;
-  if (!productId) {
-    throw new Error('Product creation failed, no ID returned');
-  }
+  const productId = requireProductId(confirmResponse.data.id);
   console.log(`Product confirmed and created. ID: ${productId}`);
 
   // ==========================================
@@ -143,7 +135,7 @@ async function run() {
 </body>
 </html>`;
 
-  runRemoteCommand(`cat <<'EOF' > ${mockFilePath}\n${updatedPriceHtml}\nEOF`);
+  runRemoteCommand(`cat > ${quoteRemoteArgument(mockFilePath)}`, updatedPriceHtml);
   
   console.log('Triggering backend refresh inside container...');
   const inContainerRunner = `
@@ -156,8 +148,8 @@ async function execute() {
 execute().catch(e => { console.error(e); process.exit(1); });
 `;
   
-  runRemoteCommand(`cat <<'EOF' > ${VODKA_DIR}/backend/runner-temp.js\n${inContainerRunner}\nEOF`);
-  runRemoteCommand(`docker cp ${VODKA_DIR}/backend/runner-temp.js pricestalker-backend:/app/backend/runner-temp.js`);
+  runRemoteCommand(`cat > ${quoteRemoteArgument(`${VODKA_DIR}/backend/runner-temp.js`)}`, inContainerRunner);
+  runRemoteCommand(`docker cp -- ${quoteRemoteArgument(`${VODKA_DIR}/backend/runner-temp.js`)} pricestalker-backend:/app/backend/runner-temp.js`);
   runRemoteCommand(`docker exec pricestalker-backend node runner-temp.js`);
   console.log('Refresh completed inside container.');
 
@@ -190,7 +182,7 @@ execute().catch(e => { console.error(e); process.exit(1); });
 </body>
 </html>`;
 
-  runRemoteCommand(`cat <<'EOF' > ${mockFilePath}\n${outOfStockHtml}\nEOF`);
+  runRemoteCommand(`cat > ${quoteRemoteArgument(mockFilePath)}`, outOfStockHtml);
   
   console.log('Triggering backend refresh...');
   runRemoteCommand(`docker exec pricestalker-backend node runner-temp.js`);
@@ -213,7 +205,7 @@ execute().catch(e => { console.error(e); process.exit(1); });
   // ==========================================
   console.log('\n--- Step 7: Simulating page gone (404) ---');
   // Deleting the mock file will trigger 404 from Nginx
-  runRemoteCommand(`rm -f ${mockFilePath}`);
+  runRemoteCommand(`rm -f -- ${quoteRemoteArgument(mockFilePath)}`);
 
   console.log('Triggering backend refresh...');
   runRemoteCommand(`docker exec pricestalker-backend node runner-temp.js`);
@@ -248,7 +240,7 @@ execute().catch(e => { console.error(e); process.exit(1); });
   // ==========================================
   console.log('\n--- Cleaning up temporary files ---');
   runRemoteCommand(`docker exec pricestalker-backend rm -f runner-temp.js`);
-  runRemoteCommand(`rm -f ${VODKA_DIR}/backend/runner-temp.js`);
+  runRemoteCommand(`rm -f -- ${quoteRemoteArgument(`${VODKA_DIR}/backend/runner-temp.js`)}`);
   console.log('Temporary files cleared.');
 
   console.log('\nALL TESTS PASSED SUCCESSFULLY! E2E Lifecycle is structurally sound!\n');
@@ -259,7 +251,7 @@ run().catch(error => {
   // Attempt remote temp cleanup in case of crash
   try {
     runRemoteCommand(`docker exec pricestalker-backend rm -f runner-temp.js`);
-    runRemoteCommand(`rm -f ${VODKA_DIR}/backend/runner-temp.js`);
+    runRemoteCommand(`rm -f -- ${quoteRemoteArgument(`${VODKA_DIR}/backend/runner-temp.js`)}`);
   } catch {}
   process.exit(1);
 });

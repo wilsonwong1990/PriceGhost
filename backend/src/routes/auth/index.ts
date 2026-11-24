@@ -41,8 +41,7 @@ router.get('/password-reset-status', asyncHandler(async (_req, res) => {
 // endpoint cannot be used to probe which emails have accounts.
 router.post('/forgot-password', asyncHandler(async (req, res) => {
   const { email } = req.body;
-  const baseUrl = process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  await passwordResetService.requestReset(email, baseUrl, req.ip || 'unknown');
+  await passwordResetService.requestReset(email, req.ip || 'unknown');
   res.json({ message: 'If that email belongs to an account, a reset link has been sent.' });
 }, 'Auth | Forgot Password', 'Auth', 'Failed to process password reset request'));
 

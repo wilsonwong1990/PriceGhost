@@ -62,8 +62,37 @@ export async function runAutoRetailerConfig(params: {
 
       const allGenericSelectors = await getAllGenericSelectors();
 
+      // Manual confirmation data is client-supplied. Only selectors already in
+      // the shared retailer config may be promoted from it.
+      const configuredSelectors = new Set([
+        ...priceSelectors,
+        ...dealPriceSelectors,
+        ...memberPriceSelectors,
+        ...preOrderPriceSelectors,
+        ...originalPriceSelectors,
+      ].map(selector => normalizeSelector(selector).trim()));
+      const isConfiguredSelector = (selector: string) =>
+        configuredSelectors.has(normalizeSelector(selector).trim());
+      const safeManualSelector = manualSelector && isConfiguredSelector(manualSelector)
+        ? manualSelector
+        : undefined;
+      const trustedScrapedData = scrapedData
+        ? {
+            ...scrapedData,
+            priceCandidates: (scrapedData.priceCandidates || []).filter(
+              candidate => typeof candidate.selector === 'string' && isConfiguredSelector(candidate.selector)
+            ),
+          }
+        : undefined;
+      if (manualSelector && !safeManualSelector) {
+        configTrace.push('Selectors | Ignored unconfigured selector from client confirmation');
+      }
+
       // 1. Resolve selector to prioritize
-      let { selector: winningSelector, method: winningMethod } = resolveWinningSelector(scrapedData, manualSelector);
+      let { selector: winningSelector, method: winningMethod } = resolveWinningSelector(
+        trustedScrapedData,
+        safeManualSelector
+      );
 
       let targetArrayName = 'price_selectors';
       let targetArray = priceSelectors;

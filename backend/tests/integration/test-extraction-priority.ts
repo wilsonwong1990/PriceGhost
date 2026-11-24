@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { execSync } from 'child_process';
+import { quoteRemoteArgument, runSshCommand } from './ssh-command';
 
 /**
  * Extraction Priority Integration Test (Production-Safe)
@@ -77,18 +77,19 @@ execute().catch(console.error);
   try {
     // Write runner.js to vodka host
     console.log('Transferring runner to vodka...');
-    execSync(`ssh ${SSH_TARGET} "cat <<EOF > ${VODKA_DIR}/backend/tests/integration/runner.js\n${runnerJs}\nEOF"`);
+    const runnerPath = quoteRemoteArgument(`${VODKA_DIR}/backend/tests/integration/runner.js`);
+    runSshCommand(SSH_TARGET, `cat > ${runnerPath}`, runnerJs);
     
     // Copy runner.js into container
     console.log('Copying runner into container...');
-    execSync(`ssh ${SSH_TARGET} "docker cp ${VODKA_DIR}/backend/tests/integration/runner.js pricestalker-backend:/app/runner-temp.js"`);
+    runSshCommand(SSH_TARGET, `docker cp -- ${runnerPath} pricestalker-backend:/app/runner-temp.js`);
 
     // Run it
     console.log('Executing inside container...\n');
-    execSync(`ssh ${SSH_TARGET} "docker exec -w /app pricestalker-backend node runner-temp.js"`, { stdio: 'inherit' });
+    console.log(runSshCommand(SSH_TARGET, 'docker exec -w /app pricestalker-backend node runner-temp.js'));
 
     // Cleanup
-    execSync(`ssh ${SSH_TARGET} "docker exec pricestalker-backend rm /app/runner-temp.js"`);
+    runSshCommand(SSH_TARGET, 'docker exec pricestalker-backend rm /app/runner-temp.js');
   } catch (error: any) {
     console.error('Execution failed:', error.message);
   }

@@ -7,6 +7,10 @@ packages:
 # isolated linker exposes pnpm virtual-store paths in inferred Express types.
 nodeLinker: hoisted
 
+overrides:
+  proxy-addr: 2.0.8
+  seroval: 1.6.2
+
 allowBuilds:
   esbuild: true
   koffi: false
