@@ -81,6 +81,7 @@ const REVIEW_REASON_COPY: Record<string, string> = {
   oos_guardrail: 'This item appears to be out of stock. Please confirm the last known price.',
   manual_rescan: 'You requested a manual re-scan. Please verify the current price.',
   first_scan: 'This is the first scan for this product. Please select the correct price to track.',
+  variant_selection_required: 'Amazon did not confirm this listing’s selected size or option. Use the selected option’s product URL, or enter a price manually.',
 };
 
 type PriceTypeFilter = 'all' | 'standard' | 'deal' | 'member' | 'rrp';
@@ -108,7 +109,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
   const { user } = useAuth();
 
   const [activeFilter, setActiveFilter] = useState<PriceTypeFilter>('all');
-  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [showManualEntry, setShowManualEntry] = useState(reviewReason === 'variant_selection_required');
   const [manualPrice, setManualPrice] = useState('');
   const [manualCurrency, setManualCurrency] = useState('');
   // Candidate that seeded manual entry (currency-only completion): its
@@ -166,6 +167,16 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
     setSelectedIndex(filteredCandidates.length > 0 ? 0 : null);
     setWarningMessage(null);
   }, [filteredCandidates]);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setShowManualEntry(reviewReason === 'variant_selection_required');
+      setManualSource(null);
+      setManualPrice('');
+      setManualCurrency('');
+      setWarningMessage(null);
+    }
+  }, [isOpen, reviewReason]);
 
   if (!isOpen) return null;
 
@@ -353,7 +364,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
                   ))}
                 </select>
               </div>
-              <button
+              {reviewReason !== 'variant_selection_required' && <button
                 className="manual-entry-link"
                 style={{ textAlign: 'left', marginTop: '0.25rem' }}
                 onClick={() => {
@@ -363,7 +374,7 @@ const PriceSelectionModal: React.FC<PriceSelectionModalProps> = ({
                 }}
               >
                 ← Back to candidates list
-              </button>
+              </button>}
             </div>
           ) : (
             <div className="price-candidates-list">

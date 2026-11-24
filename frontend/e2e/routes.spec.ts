@@ -527,6 +527,50 @@ test('exposes product creation from the products dashboard', async ({ page }) =>
   await expect(addProductLinks.first()).toHaveAttribute('href', '/products/new');
 });
 
+test('offers manual entry when an Amazon option cannot be verified', async ({ page }) => {
+  const url = 'https://www.amazon.com/dp/B012345678';
+  let confirmedMethod = '';
+  await page.addInitScript((user) => {
+    localStorage.setItem('token', 'acceptance-token');
+    localStorage.setItem('user', JSON.stringify(user));
+  }, authenticatedUser);
+  await page.route('**/api/settings/currencies', route =>
+    route.fulfill({ json: [{ iso: 'USD', currency_name: 'US Dollar' }] })
+  );
+  await page.route('**/api/products', async route => {
+    if (route.request().method() !== 'POST') {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    const body = route.request().postDataJSON();
+    if (body.selectedMethod) {
+      confirmedMethod = body.selectedMethod;
+      await route.fulfill({ json: { ...product, url } });
+    } else {
+      await route.fulfill({ json: {
+        needsReview: true, name: null, imageUrl: null, stockStatus: 'unknown',
+        priceCandidates: [], reviewReason: 'variant_selection_required', url, category: null, html: null,
+      } });
+    }
+  });
+
+  await page.goto('/products/new');
+  await page.getByLabel('Product URL').fill(url);
+  await page.getByRole('button', { name: 'Add Product' }).click();
+  await expect(page.getByText('Amazon did not confirm this listing’s selected size or option.')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Back to candidates list/ })).toHaveCount(0);
+  await page.getByPlaceholder('e.g. 99.99').fill('12');
+  await page.locator('.manual-entry-select').selectOption('USD');
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Add Product' }).click();
+  await expect(page.getByPlaceholder('e.g. 99.99')).toHaveValue('');
+  await expect(page.locator('.manual-entry-select')).toHaveValue('');
+  await page.getByPlaceholder('e.g. 99.99').fill('78');
+  await page.locator('.manual-entry-select').selectOption('USD');
+  await page.getByRole('button', { name: 'Confirm Selection' }).click();
+  await expect.poll(() => confirmedMethod).toBe('manual');
+});
+
 test('renders every settings section at its canonical path', async ({ page }) => {
   await page.addInitScript((user) => {
     localStorage.setItem('token', 'acceptance-token');

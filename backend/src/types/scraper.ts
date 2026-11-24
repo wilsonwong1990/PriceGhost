@@ -48,9 +48,10 @@ export type ScrapeFailureReason =
   | 'auto_map_rejected'
   | 'browser_scraper_failed'
   | 'cart_price_unavailable'
+  | 'variant_selection_required'
   | 'no_price_found';
 
-export type ReviewReason = 'no_consensus' | 'ai_correction' | 'oos_guardrail' | 'manual_rescan' | 'first_scan' | 'missing_currency';
+export type ReviewReason = 'no_consensus' | 'ai_correction' | 'oos_guardrail' | 'manual_rescan' | 'first_scan' | 'missing_currency' | 'variant_selection_required';
 
 export interface ScrapedProductWithVoting extends ScrapedProduct {
   acquisition?: AcquisitionMetadata;

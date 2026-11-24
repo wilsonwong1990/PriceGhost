@@ -87,6 +87,13 @@ export class ProductRefreshService {
       { allowAmazonCart: true }
     );
 
+    if (scrapedData.failureReason === 'variant_selection_required') {
+      await productRepository.updateLastChecked(productId, product.refresh_interval);
+      await productRepository.update(productId, userId, { needs_price_review: true });
+      logger.warn(`Product ${productId} | Amazon | ${scrapedData.failureDetail}`, 'Products', { product_id: productId });
+      return { stockStatus: product.stock_status, aiStatus: product.ai_status, failureReason: scrapedData.failureReason };
+    }
+
     // 1.5 Separate two things that used to be conflated.
     //
     // A *definitive* result -- 404, 410, a redirect to the home page, a soft 404

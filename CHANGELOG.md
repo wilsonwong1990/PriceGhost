@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Amazon tracking now checks that prices and availability belong to the
+  requested selected listing, rather than a different size or recommendation.
+  When the option cannot be verified, existing tracking data is retained and
+  the user is prompted to use the selected option's URL.
 - Corrected Firefox pool reservations, request language headers, debug engine
   saves, and proxy credential redaction for SOCKS URLs.
 - General system settings responses no longer expose stored AI API keys.

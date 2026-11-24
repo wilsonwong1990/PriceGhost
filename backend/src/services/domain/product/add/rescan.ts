@@ -80,7 +80,7 @@ export class ProductRescanService {
       imageUrl: scrapedData.imageUrl,
       stockStatus: scrapedData.stockStatus,
       priceCandidates: candidates,
-      reviewReason: 'manual_rescan',
+      reviewReason: scrapedData.failureReason === 'variant_selection_required' ? 'variant_selection_required' : 'manual_rescan',
       amazonCartRequired: scrapedData.amazonCartRequired === true,
       url: product.url,
       id: productId,

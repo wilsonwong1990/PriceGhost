@@ -32,6 +32,8 @@ const { repo, prices, persistence, notifications, scrape } = vi.hoisted(() => ({
     setPageGoneStreak: vi.fn().mockResolvedValue(undefined),
     setUnavailableReason: vi.fn().mockResolvedValue(undefined),
     setPaused: vi.fn().mockResolvedValue(undefined),
+    updateLastChecked: vi.fn().mockResolvedValue(undefined),
+    update: vi.fn().mockResolvedValue(undefined),
   },
   prices: { getLatest: vi.fn().mockResolvedValue(null) },
   persistence: { saveScrapeResult: vi.fn().mockResolvedValue(null) },
@@ -120,6 +122,20 @@ describe('a denied refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     repo.recordFailure.mockResolvedValue(1);
+  });
+
+  it('reschedules an ambiguous Amazon variant without persisting or notifying', async () => {
+    const scraped = { ...denied(), failureReason: 'variant_selection_required' as const };
+    await refresh(scraped, { stock_status: 'out_of_stock', checking_paused: true, auto_paused: true, refresh_interval: 3600 });
+    expect(repo.updateLastChecked).toHaveBeenCalledWith(42, 3600);
+    expect(repo.update).toHaveBeenCalledWith(42, 1, { needs_price_review: true });
+    expect(repo.clearFailureState).not.toHaveBeenCalled();
+    expect(repo.setPaused).not.toHaveBeenCalled();
+    expect(persistence.saveScrapeResult).not.toHaveBeenCalled();
+    expect(notifications.notifyProductRestored).not.toHaveBeenCalled();
+    expect(notifications.notifyBackInStock).not.toHaveBeenCalled();
+    expect(notifications.notifyPriceDrop).not.toHaveBeenCalled();
+    expect(notifications.notifyTargetHit).not.toHaveBeenCalled();
   });
 
   it('used to clear the failure state, which is the bug', async () => {

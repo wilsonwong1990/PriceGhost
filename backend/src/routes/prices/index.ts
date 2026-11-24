@@ -59,6 +59,11 @@ router.post('/:productId/refresh', asyncHandler(async (req: AuthRequest, res: Re
     return;
   }
 
+  if (result.failureReason === 'variant_selection_required') {
+    res.status(422).json({ error: 'Amazon did not confirm the requested size or option. Select the desired option on Amazon and use its product URL.' });
+    return;
+  }
+
   res.json({
     message: result.stockStatus === 'out_of_stock'
       ? 'Product is currently out of stock'

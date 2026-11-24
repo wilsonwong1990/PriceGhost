@@ -57,6 +57,21 @@ export class ProductDiscoveryService {
       error.statusCode = 400;
       throw error;
     }
+
+    if (scrapedData.failureReason === 'variant_selection_required') {
+      return {
+        needsReview: true,
+        name: null,
+        imageUrl: null,
+        stockStatus: 'unknown',
+        priceCandidates: [],
+        reviewReason: 'variant_selection_required',
+        url,
+        category,
+        html: null,
+      };
+    }
+
     if (!scrapedData.price && scrapedData.stockStatus !== 'out_of_stock' && scrapedData.stockStatus !== 'pre_order') {
       const usedBrowserScraper = Boolean(scrapedData.learnedFlags?.use_browser_scraper);
       throw new Error(describeScrapeFailure(scrapedData.failureReason, scrapedData.failureDetail, usedBrowserScraper));

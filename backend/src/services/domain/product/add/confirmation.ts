@@ -5,6 +5,8 @@ import { FALLBACK_REFRESH_INTERVAL_SECONDS } from '../../../../utils/system/chec
 import { assertUrlIsSafe } from '../../../../utils/system/url-safety';
 import { scrapeProductWithVoting } from '../../../scraper';
 import { AMAZON_CART_METHOD, amazonTarget } from '../../../scraper/acquisition/amazon';
+import { isAmazonUrl } from '../../../scraper/extractors/amazon-scope';
+import type { PriceCandidate, ScrapedProductWithVoting } from '../../../../types/scraper';
 
 function isCartSelection(url: string, method: unknown): boolean {
   if (method !== AMAZON_CART_METHOD) return false;
@@ -68,6 +70,28 @@ async function verifyCartSelection(
   return scraped;
 }
 
+async function verifyAmazonSelection(
+  url: string,
+  userId: number,
+  price: number,
+  currency: string,
+  method: string,
+  productId?: number
+): Promise<{ scraped: ScrapedProductWithVoting; candidate: PriceCandidate } | null> {
+  if (!isAmazonUrl(url) || method === 'manual') return null;
+  await assertUrlIsSafe(url, { policy: 'allow-private-lan' });
+  const scraped = await scrapeProductWithVoting(url, userId, undefined, undefined, undefined, undefined, undefined, productId);
+  const candidate = (Array.isArray(scraped.priceCandidates) ? scraped.priceCandidates : []).find(c =>
+    c.price === price && (!c.currency || c.currency === currency) && c.method === method
+  );
+  if (scraped.failureReason || scraped.unavailableReason || !candidate) {
+    const error: Error & { statusCode?: number } = new Error('Amazon could not confirm this price for the selected option. Rescan the listing or use the selected option’s product URL.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return { scraped, candidate };
+}
+
 export class ProductConfirmationService {
   /**
    * Creates and confirms a product when the client provides a pre-selected candidate.
@@ -97,13 +121,24 @@ export class ProductConfirmationService {
       ? await verifyCartSelection(userId, url, selectedPrice, selectedCurrency)
       : null;
 
+    const amazon = isAmazonUrl(url);
+    if (amazon && (!Number.isFinite(selectedPrice) || selectedPrice <= 0)) {
+      const err: Error & { statusCode?: number } = new Error('A valid price is required to confirm an Amazon listing');
+      err.statusCode = 400;
+      throw err;
+    }
+    const verified = cartRequired
+      ? null
+      : await verifyAmazonSelection(url, userId, selectedPrice, selectedCurrency, selectedMethod);
     const product = await productRepository.create(
       userId,
       url,
-      verifiedCart ? verifiedCart.name?.substring(0, 255) || null : name ? name.substring(0, 255) : null,
-      verifiedCart ? verifiedCart.imageUrl || null : imageUrl || null,
+      verifiedCart
+        ? verifiedCart.name?.substring(0, 255) || null
+        : amazon ? verified?.scraped.name?.substring(0, 255) || null : name ? name.substring(0, 255) : null,
+      verifiedCart ? verifiedCart.imageUrl || null : amazon ? verified?.scraped.imageUrl || null : imageUrl || null,
       refresh_interval || FALLBACK_REFRESH_INTERVAL_SECONDS,
-      verifiedCart ? verifiedCart.stockStatus : stockStatus || 'unknown',
+      verifiedCart ? verifiedCart.stockStatus : amazon ? verified?.scraped.stockStatus || 'unknown' : stockStatus || 'unknown',
       cartRequired ? null : 'confirmed',
       category || null,
       cartRequired ? AMAZON_CART_METHOD : null
@@ -114,17 +149,21 @@ export class ProductConfirmationService {
       userId, 
       verifiedCart || {
         ...options,
+        ...(verified?.scraped || {}),
+        ...(amazon && !verified ? { name: null, imageUrl: null } : {}),
         price: { price: selectedPrice, currency: selectedCurrency },
-        memberPrice,
-        originalPrice,
+        memberPrice: amazon ? verified?.scraped.memberPrice : memberPrice,
+        originalPrice: amazon ? verified?.scraped.originalPrice : originalPrice,
+        stockStatus: amazon ? verified?.scraped.stockStatus || 'unknown' : stockStatus,
+        ...(amazon ? { needsReview: false } : {}),
         selectedMethod,
-        html,
+        html: amazon ? verified?.scraped.html : html,
         amazonCartRequired: false,
         amazonCartObservation: undefined,
         needsReview: false,
       } as any, 
       'manual-add',
-      manualSelector
+      amazon ? verified?.candidate.selector : manualSelector
     );
     rejectStaleSelection(persistence?.ignored);
 
@@ -154,27 +193,54 @@ export class ProductConfirmationService {
       error.statusCode = 409;
       throw error;
     }
+    const amazon = isAmazonUrl(product.url);
+    if (amazon && (typeof selectedPrice !== 'number' || !Number.isFinite(selectedPrice) || selectedPrice <= 0)) {
+      const err: Error & { statusCode?: number } = new Error('A valid price is required to confirm an Amazon listing');
+      err.statusCode = 400;
+      throw err;
+    }
     if (cartRequired && product.preferred_extraction_method !== AMAZON_CART_METHOD) {
       await productPersistenceService.rememberAmazonCartRequirement(productId, userId);
     }
     const verifiedCart = cartRequired
       ? await verifyCartSelection(userId, product.url, selectedPrice, selectedCurrency, productId, product.last_checked)
       : null;
+    let verified: Awaited<ReturnType<typeof verifyAmazonSelection>> = null;
+    if (!cartRequired && selectedPrice !== undefined) {
+      try {
+        verified = await verifyAmazonSelection(product.url, userId, selectedPrice, selectedCurrency, selectedMethod, productId);
+      } catch (error) {
+        const latestProduct = await productRepository.findById(productId, userId);
+        if (latestProduct?.preferred_extraction_method === AMAZON_CART_METHOD) {
+          const staleSelectionError: Error & { statusCode?: number } = new Error(
+            'This product requires a verified Amazon cart price. Refresh it before choosing a price.'
+          );
+          staleSelectionError.statusCode = 409;
+          throw staleSelectionError;
+        }
+        throw error;
+      }
+    }
     const persistence = await productPersistenceService.saveScrapeResult(
       productId,
       userId,
       verifiedCart || {
         ...selection,
+        ...(verified?.scraped || {}),
+        ...(amazon && !verified ? { name: null, imageUrl: null } : {}),
         price: selectedPrice !== undefined ? { price: selectedPrice, currency: selectedCurrency } : undefined,
-        memberPrice,
-        originalPrice,
+        memberPrice: amazon ? verified?.scraped.memberPrice : memberPrice,
+        originalPrice: amazon ? verified?.scraped.originalPrice : originalPrice,
+        stockStatus: amazon ? verified?.scraped.stockStatus || 'unknown' : selection.stockStatus,
+        html: amazon ? verified?.scraped.html : selection.html,
+        ...(amazon ? { needsReview: false } : {}),
         selectedMethod,
         amazonCartRequired: false,
         amazonCartObservation: undefined,
         needsReview: false,
       } as any,
       verifiedCart ? 'refresh' : 'manual-confirm',
-      selection.selector
+      verifiedCart ? selection.selector : amazon ? verified?.candidate.selector : selection.selector
     );
     rejectStaleSelection(persistence?.ignored);
 

@@ -53,9 +53,10 @@ const observation = {
 } as const;
 
 function acquisition(cart: unknown, challengeReason: string | null = null) {
+  const html = '<html><body><input id="ASIN" value="B012345678"><div id="corePrice_feature_div" data-csa-c-asin="B012345678"><span class="a-price apex-pricetopay-value"><span class="a-offscreen">$208.00</span></span></div><div id="availabilityInsideBuyBox_feature_div" data-csa-c-asin="B012345678"><div id="availability">In stock</div></div></body></html>';
   return {
-    html: '<div id="buybox">Add to Cart to see price</div>',
-    $: cheerio.load('<div id="buybox">Add to Cart to see price</div>'),
+    html,
+    $: cheerio.load(html),
     challengeReason,
     usedRemoteFallback: false,
     learnedFlags: {},
@@ -148,7 +149,7 @@ describe('Amazon cart orchestration', () => {
     mocks.acquire.mockResolvedValue(acquisition({ required: false, observation: null }));
     const result = await scrape();
     expect(result.price).toEqual({ price: 208, currency: 'USD' });
-    expect(result.html).toContain('Add to Cart');
+    expect(result.html).toContain('$208.00');
     expect(mocks.verify).toHaveBeenCalledTimes(1);
   });
 
